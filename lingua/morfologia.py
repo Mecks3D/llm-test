@@ -29,10 +29,12 @@ def _inizia_speciale_maschile(lemma: str) -> bool:
     return p.startswith("s") and len(p) > 1 and p[1] not in _VOCALI
 
 
-def articolo_det(lemma: str, plurale: bool = False) -> str:
-    genere = _genere(lemma)
-    vocale = lemma[0].lower() in _VOCALI
-    speciale = _inizia_speciale_maschile(lemma)
+def articolo_det_per_genere(genere: str, parola: str, plurale: bool = False) -> str:
+    """Come articolo_det, ma il genere è dato esplicitamente e la scelta
+    lo/il/l'/gli/i dipende dalla lettera iniziale di `parola` (serve quando
+    tra articolo e nome si interpone un ordinale: "l'ottava mela")."""
+    vocale = parola[0].lower() in _VOCALI
+    speciale = _inizia_speciale_maschile(parola)
     if genere == "m":
         if plurale:
             return "gli" if (vocale or speciale) else "i"
@@ -42,6 +44,10 @@ def articolo_det(lemma: str, plurale: bool = False) -> str:
     if plurale:
         return "le"
     return "l'" if vocale else "la"
+
+
+def articolo_det(lemma: str, plurale: bool = False) -> str:
+    return articolo_det_per_genere(_genere(lemma), lemma, plurale)
 
 
 def articolo_indet(lemma: str) -> str:
@@ -67,19 +73,22 @@ def prep_articolata(prep: str, lemma: str) -> str:
     return _PREP_ARTICOLATA[chiave]
 
 
-def _unisci(preposizione_articolata: str, parola: str) -> str:
-    if preposizione_articolata.endswith("'"):
-        return f"{preposizione_articolata}{parola}"
-    return f"{preposizione_articolata} {parola}"
+def unisci(primo: str, secondo: str) -> str:
+    """Accosta due pezzi di frase, senza spazio se il primo elide (finisce
+    in apostrofo): unisci("l'", "acqua") -> "l'acqua", unisci("la", "legna")
+    -> "la legna"."""
+    if primo.endswith("'"):
+        return f"{primo}{secondo}"
+    return f"{primo} {secondo}"
 
 
 def partitivo(lemma: str) -> str:
-    return _unisci(prep_articolata("di", lemma), lemma)
+    return unisci(prep_articolata("di", lemma), lemma)
 
 
 def prep_lemma(prep: str, lemma: str) -> str:
     """Preposizione articolata + lemma, es. "nel cestino", "dalla scatola"."""
-    return _unisci(prep_articolata(prep, lemma), lemma)
+    return unisci(prep_articolata(prep, lemma), lemma)
 
 
 def loc_in(luogo_id: str) -> str:
