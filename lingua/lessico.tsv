@@ -1,0 +1,293 @@
+# lingua/lessico.tsv — il lessico, unica fonte del vocabolario (FASE1_PIANO.md §7)
+# Formato: lemma<TAB>categoria<TAB>tratti<TAB>definizione
+# tratti: coppie chiave=valore separate da virgola, "-" se vuoti.
+# definizione: testo in primitivi NSM, TODO se mancante, "-" per i primitivi stessi.
+# L'ORDINE DELLE RIGHE E' PARTE DEL CONTRATTO: le prime 65 righe sono i
+# primitivi NSM nell'ordine normativo (FASE1_PIANO.md §7.1); non riordinarle.
+#
+# --- 65 primitivi NSM (indici 0-64) ---
+io	PRIM	pos=PRON	-
+tu	PRIM	pos=PRON	-
+qualcuno	PRIM	pos=PRON	-
+qualcosa	PRIM	pos=PRON	-
+gente	PRIM	pos=NOUN	-
+corpo	PRIM	pos=NOUN	-
+tipo	PRIM	pos=NOUN	-
+parte	PRIM	pos=NOUN	-
+questo	PRIM	pos=PRON	-
+stesso	PRIM	pos=ADJ	-
+altro	PRIM	pos=ADJ	-
+uno	PRIM	pos=NUM,valore=1	-
+due	PRIM	pos=NUM,valore=2	-
+alcuni	PRIM	pos=ADJ	-
+tutto	PRIM	pos=ADJ	-
+molti	PRIM	pos=ADJ	-
+pochi	PRIM	pos=ADJ	-
+buono	PRIM	pos=ADJ	-
+cattivo	PRIM	pos=ADJ	-
+grande	PRIM	pos=ADJ	-
+piccolo	PRIM	pos=ADJ	-
+pensare	PRIM	pos=VERB	-
+sapere	PRIM	pos=VERB	-
+volere	PRIM	pos=VERB	-
+non-volere	PRIM	pos=VERB	-
+sentire	PRIM	pos=VERB	-
+vedere	PRIM	pos=VERB	-
+udire	PRIM	pos=VERB	-
+dire	PRIM	pos=VERB,pres3s=dice	-
+parola	PRIM	pos=NOUN	-
+vero	PRIM	pos=ADJ	-
+fare	PRIM	pos=VERB	-
+accadere	PRIM	pos=VERB	-
+muoversi	PRIM	pos=VERB	-
+trovarsi	PRIM	pos=VERB,pres3s=si trova	-
+esserci	PRIM	pos=VERB,pres3s=c'è,pres3p=ci sono	-
+essere	PRIM	pos=VERB,pres3s=è	-
+mio	PRIM	pos=ADJ	-
+vivere	PRIM	pos=VERB	-
+morire	PRIM	pos=VERB	-
+quando	PRIM	pos=ADV	-
+adesso	PRIM	pos=ADV	-
+prima	PRIM	pos=ADV	-
+dopo	PRIM	pos=ADV	-
+molto-tempo	PRIM	pos=ADV	-
+poco-tempo	PRIM	pos=ADV	-
+per-un-po	PRIM	pos=ADV	-
+momento	PRIM	pos=NOUN	-
+dove	PRIM	pos=ADV	-
+qui	PRIM	pos=ADV	-
+sopra	PRIM	pos=ADV	-
+sotto	PRIM	pos=ADV	-
+lontano	PRIM	pos=ADV	-
+vicino	PRIM	pos=ADV	-
+lato	PRIM	pos=NOUN	-
+dentro	PRIM	pos=ADV	-
+toccare	PRIM	pos=VERB	-
+non	PRIM	pos=ADV	-
+forse	PRIM	pos=ADV	-
+potere	PRIM	pos=VERB	-
+perche	PRIM	pos=ADV,superficie=perché	-
+se	PRIM	pos=ADV	-
+molto	PRIM	pos=ADV	-
+piu	PRIM	pos=ADV,superficie=più	-
+come	PRIM	pos=ADV	-
+#
+# --- Persone (PROPRIO; superficie = lemma capitalizzato) ---
+anna	PROPRIO	genere=f	TODO
+piero	PROPRIO	genere=m	TODO
+maria	PROPRIO	genere=f	TODO
+marco	PROPRIO	genere=m	TODO
+sara	PROPRIO	genere=f	TODO
+luca	PROPRIO	genere=m	TODO
+#
+# --- Luoghi (NOME) ---
+cucina	NOME	genere=f,loc_in=in cucina,loc_da=dalla cucina	qui la gente fa qualcosa; dopo, la gente può mangiare
+salotto	NOME	genere=m,loc_in=in salotto,loc_da=dal salotto	TODO
+giardino	NOME	genere=m,loc_in=in giardino,loc_da=dal giardino	TODO
+camera	NOME	genere=f,loc_in=in camera,loc_da=dalla camera	TODO
+orto	NOME	genere=m,loc_in=nell'orto,loc_da=dall'orto	TODO
+bosco	NOME	genere=m,loc_in=nel bosco,loc_da=dal bosco	TODO
+#
+# --- Oggetti unici (NOME) ---
+pane	NOME	genere=m,plurale=pani	TODO
+palla	NOME	genere=f,plurale=palle	TODO
+cestino	NOME	genere=m,plurale=cestini	TODO
+scatola	NOME	genere=f,plurale=scatole	TODO
+secchio	NOME	genere=m,plurale=secchi	TODO
+libro	NOME	genere=m,plurale=libri	TODO
+camino	NOME	genere=m,plurale=camini	TODO
+#
+# --- Risorse (NOME) ---
+mela	NOME	genere=f,plurale=mele	qualcosa di piccolo; la gente può mangiare questa cosa; è buono
+acqua	NOME	genere=f,plurale=acque,massa=si	TODO
+legna	NOME	genere=f,plurale=legne,massa=si	TODO
+#
+# --- Fonti (NOME) ---
+melo	NOME	genere=m	TODO
+pozzo	NOME	genere=m	TODO
+bosco_legna	NOME	genere=m,superficie=nel bosco	TODO
+#
+# --- Verbi degli stampi (VERBO) ---
+andare	VERBO	pres3s=va	TODO
+prendere	VERBO	pres3s=prende	TODO
+posare	VERBO	pres3s=posa	TODO
+mettere_dentro	VERBO	superficie_pres3s=mette	TODO
+tirare_fuori	VERBO	superficie_pres3s=tira fuori	TODO
+dare	VERBO	pres3s=dà,part=dato	qualcuno ha qualcosa; questo qualcuno fa qualcosa; dopo, un altro qualcuno ha questa cosa
+mangiare	VERBO	pres3s=mangia	qualcuno fa qualcosa con qualcosa; dopo, questa cosa è dentro il corpo di questo qualcuno
+aprire	VERBO	pres3s=apre	TODO
+chiudere	VERBO	pres3s=chiude	TODO
+guardare	VERBO	pres3s=guarda	TODO
+dormire	VERBO	pres3s=dorme	qualcuno non fa niente per molto tempo; il corpo di questo qualcuno lo vuole
+svegliarsi	VERBO	pres3s=si sveglia	TODO
+giocare	VERBO	pres3s=gioca	TODO
+cercare	VERBO	pres3s=cerca	TODO
+bruciare	VERBO	pres3s=brucia	TODO
+addormentarsi	VERBO	pres3s=si addormenta	TODO
+raccogliere	VERBO	pres3s=raccoglie,part=raccolto	TODO
+avere	VERBO	pres3s=ha	TODO
+portare	VERBO	pres3s=porta	TODO
+#
+# --- Parentela (REL) ---
+padre_di	REL	superficie=il padre	TODO
+madre_di	REL	superficie=la madre	TODO
+figlio_di	REL	superficie=il figlio	TODO
+figlia_di	REL	superficie=la figlia	TODO
+marito_di	REL	superficie=il marito	TODO
+moglie_di	REL	superficie=la moglie	TODO
+fratello_di	REL	superficie=il fratello	TODO
+sorella_di	REL	superficie=la sorella	TODO
+nonno_di	REL	superficie=il nonno	TODO
+nonna_di	REL	superficie=la nonna	TODO
+nipote_di	REL	superficie_m=il nipote,superficie_f=la nipote	TODO
+suocero_di	REL	superficie=il suocero	TODO
+suocera_di	REL	superficie=la suocera	TODO
+genero_di	REL	superficie=il genero	TODO
+nuora_di	REL	superficie=la nuora	TODO
+zio_di	REL	superficie=lo zio	TODO
+zia_di	REL	superficie=la zia	TODO
+cugino_di	REL	superficie=il cugino	TODO
+cugina_di	REL	superficie=la cugina	TODO
+#
+# --- Altri nomi (NOME) ---
+oggetto	NOME	genere=m,plurale=oggetti	TODO
+volta	NOME	genere=f,plurale=volte	TODO
+stanchezza	NOME	genere=f	TODO
+#
+# --- Aggettivi (AGG) ---
+stanco	AGG	femminile=stanca	TODO
+#
+# --- Interrogativi e speciali ---
+chi	INTERR	-	-
+quanti	INTERR	-	-
+quante	INTERR	-	-
+che-parente	INTERR	superficie=che parente	-
+non-lo-so	SPEC	superficie=Non lo so.	-
+nessuno	PRON	-	-
+#
+# --- Numeri (NUM, tratti valore=N) ---
+zero	NUM	valore=0	TODO
+tre	NUM	valore=3	TODO
+quattro	NUM	valore=4	TODO
+cinque	NUM	valore=5	TODO
+sei	NUM	valore=6	TODO
+sette	NUM	valore=7	TODO
+otto	NUM	valore=8	TODO
+nove	NUM	valore=9	TODO
+dieci	NUM	valore=10	TODO
+undici	NUM	valore=11	TODO
+dodici	NUM	valore=12	TODO
+tredici	NUM	valore=13	TODO
+quattordici	NUM	valore=14	TODO
+quindici	NUM	valore=15	TODO
+sedici	NUM	valore=16	TODO
+diciassette	NUM	valore=17	TODO
+diciotto	NUM	valore=18	TODO
+diciannove	NUM	valore=19	TODO
+venti	NUM	valore=20	TODO
+ventuno	NUM	valore=21	TODO
+ventidue	NUM	valore=22	TODO
+ventitre	NUM	valore=23,superficie=ventitré	TODO
+ventiquattro	NUM	valore=24	TODO
+venticinque	NUM	valore=25	TODO
+ventisei	NUM	valore=26	TODO
+ventisette	NUM	valore=27	TODO
+ventotto	NUM	valore=28	TODO
+ventinove	NUM	valore=29	TODO
+trenta	NUM	valore=30	TODO
+trentuno	NUM	valore=31	TODO
+trentadue	NUM	valore=32	TODO
+trentatre	NUM	valore=33,superficie=trentatré	TODO
+trentaquattro	NUM	valore=34	TODO
+trentacinque	NUM	valore=35	TODO
+trentasei	NUM	valore=36	TODO
+trentasette	NUM	valore=37	TODO
+trentotto	NUM	valore=38	TODO
+trentanove	NUM	valore=39	TODO
+quaranta	NUM	valore=40	TODO
+quarantuno	NUM	valore=41	TODO
+quarantadue	NUM	valore=42	TODO
+quarantatre	NUM	valore=43,superficie=quarantatré	TODO
+quarantaquattro	NUM	valore=44	TODO
+quarantacinque	NUM	valore=45	TODO
+quarantasei	NUM	valore=46	TODO
+quarantasette	NUM	valore=47	TODO
+quarantotto	NUM	valore=48	TODO
+quarantanove	NUM	valore=49	TODO
+cinquanta	NUM	valore=50	TODO
+cinquantuno	NUM	valore=51	TODO
+cinquantadue	NUM	valore=52	TODO
+cinquantatre	NUM	valore=53,superficie=cinquantatré	TODO
+cinquantaquattro	NUM	valore=54	TODO
+cinquantacinque	NUM	valore=55	TODO
+cinquantasei	NUM	valore=56	TODO
+cinquantasette	NUM	valore=57	TODO
+cinquantotto	NUM	valore=58	TODO
+cinquantanove	NUM	valore=59	TODO
+sessanta	NUM	valore=60	TODO
+sessantuno	NUM	valore=61	TODO
+sessantadue	NUM	valore=62	TODO
+sessantatre	NUM	valore=63,superficie=sessantatré	TODO
+sessantaquattro	NUM	valore=64	TODO
+sessantacinque	NUM	valore=65	TODO
+sessantasei	NUM	valore=66	TODO
+sessantasette	NUM	valore=67	TODO
+sessantotto	NUM	valore=68	TODO
+sessantanove	NUM	valore=69	TODO
+settanta	NUM	valore=70	TODO
+#
+# --- Ordinali (ORD, tratti valore=N; femminile regolare -o->-a, calcolato) ---
+primo	ORD	valore=1	TODO
+secondo	ORD	valore=2	TODO
+terzo	ORD	valore=3	TODO
+quarto	ORD	valore=4	TODO
+quinto	ORD	valore=5	TODO
+sesto	ORD	valore=6	TODO
+settimo	ORD	valore=7	TODO
+ottavo	ORD	valore=8	TODO
+nono	ORD	valore=9	TODO
+decimo	ORD	valore=10	TODO
+undicesimo	ORD	valore=11	TODO
+dodicesimo	ORD	valore=12	TODO
+tredicesimo	ORD	valore=13	TODO
+quattordicesimo	ORD	valore=14	TODO
+quindicesimo	ORD	valore=15	TODO
+sedicesimo	ORD	valore=16	TODO
+diciassettesimo	ORD	valore=17	TODO
+diciottesimo	ORD	valore=18	TODO
+diciannovesimo	ORD	valore=19	TODO
+ventesimo	ORD	valore=20	TODO
+ventunesimo	ORD	valore=21	TODO
+ventiduesimo	ORD	valore=22	TODO
+ventitreesimo	ORD	valore=23	TODO
+ventiquattresimo	ORD	valore=24	TODO
+venticinquesimo	ORD	valore=25	TODO
+ventiseiesimo	ORD	valore=26	TODO
+ventisettesimo	ORD	valore=27	TODO
+ventottesimo	ORD	valore=28	TODO
+ventinovesimo	ORD	valore=29	TODO
+trentesimo	ORD	valore=30	TODO
+#
+# --- Parole funzione (FUNZ) ---
+il	FUNZ	-	-
+lo	FUNZ	-	-
+la	FUNZ	-	-
+i	FUNZ	-	-
+gli	FUNZ	-	-
+le	FUNZ	-	-
+un	FUNZ	-	-
+una	FUNZ	-	-
+di	FUNZ	-	-
+a	FUNZ	-	-
+da	FUNZ	-	-
+in	FUNZ	-	-
+con	FUNZ	-	-
+su	FUNZ	-	-
+per	FUNZ	-	-
+e	FUNZ	-	-
+che	FUNZ	-	-
+ci	FUNZ	-	-
+si	FUNZ	-	-
+mai	FUNZ	-	-
+intanto	FUNZ	-	-
+alle	FUNZ	-	-
