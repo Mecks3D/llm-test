@@ -271,3 +271,35 @@ class TestGoldenEventi:
 
     def test_sequenza_b_contesto_nuovo(self):
         self._verifica_sequenza(SEQUENZA_B)
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 5 (parziale): round-trip di massa sugli eventi, seed 0-299
+# ---------------------------------------------------------------------------
+
+from mondo.generatore import _lunghezza_storia
+from mondo.simulatore import genera_storia
+from lingua.analizza import analizza_evento, analizza_storia
+from lingua.verbalizza import verbalizza_storia as _verbalizza_storia
+
+
+class TestRoundTripEventi:
+    def test_round_trip_eventi_seed_0_299(self):
+        for seed in range(300):
+            n_tick = _lunghezza_storia(seed)
+            storia = genera_storia(seed=seed, n_tick=n_tick)
+            grafi = [evento_a_grafo(e) for e in storia.eventi]
+            frasi = _verbalizza_storia(grafi, StatoDiscorso())
+            ricostruiti = analizza_storia(frasi, StatoDiscorso())
+            assert ricostruiti == grafi, f"seed {seed}: round-trip fallito"
+
+    def test_determinismo_verbalizza_storia(self):
+        storia = genera_storia(seed=42, n_tick=20)
+        grafi = [evento_a_grafo(e) for e in storia.eventi]
+        frasi1 = _verbalizza_storia(grafi, StatoDiscorso())
+        frasi2 = _verbalizza_storia(grafi, StatoDiscorso())
+        assert frasi1 == frasi2
+
+    def test_frase_malformata_solleva_valueerror(self):
+        with pytest.raises(ValueError):
+            analizza_evento("Questa non è una frase valida.", StatoDiscorso())

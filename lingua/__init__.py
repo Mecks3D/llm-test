@@ -7,6 +7,7 @@ volta (vedi fasi/FASE1_PIANO.md §13); per ora solo il lessico è pronto.
 from __future__ import annotations
 
 from . import morfologia
+from .analizza import analizza_evento, analizza_storia
 from .contesto import StatoDiscorso
 from .lessico import Lessico, VoceLessico, carica_lessico
 from .verbalizza import verbalizza_evento, verbalizza_storia
@@ -14,4 +15,5 @@ from .verbalizza import verbalizza_evento, verbalizza_storia
 __all__ = [
     "Lessico", "VoceLessico", "carica_lessico", "morfologia",
     "StatoDiscorso", "verbalizza_evento", "verbalizza_storia",
+    "analizza_evento", "analizza_storia",
 ]
