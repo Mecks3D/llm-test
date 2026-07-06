@@ -4,17 +4,21 @@ Ogni azione è un `Azione`: una tripletta (candidati, precondizioni, effetti).
 Aggiungere un'azione = aggiungere una voce a `AZIONI` in questo file, nessun
 altro modulo va toccato.
 
-- `genera_candidati(stato, agente)` enumera le istanziazioni *plausibili* dei
-  parametri (di solito già filtrate per luogo/raggiungibilità).
+- `genera_candidati(stato, agente)` enumera, per un agente SVEGLIO (è la
+  politica a garantirlo: chi dorme non sceglie azioni), le istanziazioni
+  VALIDE dei parametri: ogni candidato emesso soddisfa le precondizioni
+  (proprietà pretesa dal motore, che nel percorso caldo non riverifica, e
+  fissata da tests/test_mondo.py::test_ogni_candidato_soddisfa_le_precondizioni).
 - `precondizioni(stato, parametri)` verifica che l'istanza sia davvero
   eseguibile: è la parte "STRIPS" in senso stretto, separata dagli effetti
-  così da poter essere testata in isolamento.
+  così da poter essere testata in isolamento e da fare da rete di sicurezza
+  per parametri costruiti a mano.
 - `effetti(stato, parametri, t)` muta `stato` e ritorna l'`Evento` generato.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Callable, Optional
+from typing import Callable
 
 from . import dati_mondo as dm
 from .tipi import Evento, StatoMondo, StatoOggetto
@@ -38,11 +42,12 @@ def _raggiungibile(stato: StatoMondo, entita_id: str, agente: str) -> bool:
     return stato.luogo_effettivo(entita_id) == stato.persone[agente].luogo
 
 
-def _oggetti_raggiungibili(stato: StatoMondo, agente: str, filtro=lambda o: True) -> list[str]:
+def _oggetti_raggiungibili(stato: StatoMondo, agente: str, filtro=None) -> list[str]:
     luogo = stato.persone[agente].luogo
     risultato = []
+    luogo_contenitore: dict[str, str] = {}  # memo: il luogo di ogni contenitore, risolto una volta
     for oid, o in stato.oggetti.items():
-        if not filtro(o):
+        if filtro is not None and not filtro(o):
             continue
         tipo, rif = o.posizione
         # scorciatoia per i due casi comuni (niente ricorsione su
@@ -59,7 +64,9 @@ def _oggetti_raggiungibili(stato: StatoMondo, agente: str, filtro=lambda o: True
         contenitore = stato.oggetti[rif]
         if contenitore.apribile and not contenitore.aperto:
             continue
-        if stato.luogo_effettivo(oid) == luogo:
+        if rif not in luogo_contenitore:
+            luogo_contenitore[rif] = stato.luogo_effettivo(rif)
+        if luogo_contenitore[rif] == luogo:
             risultato.append(oid)
     return risultato
 
@@ -106,8 +113,12 @@ def _prendere_candidati(stato: StatoMondo, agente: str) -> list[dict]:
             continue
         candidati.append({"agente": agente, "oggetto": oid, "fonte": None})
     for fonte, info in dm.RISORSE.items():
-        if info["luogo"] == luogo and stato.risorse.get(fonte, 0) > 0:
-            candidati.append({"agente": agente, "oggetto": None, "fonte": fonte})
+        if info["luogo"] != luogo or stato.risorse.get(fonte, 0) <= 0:
+            continue
+        attrezzo = dm.ATTREZZO_RICHIESTO.get(fonte)
+        if attrezzo is not None and attrezzo not in stato.oggetti_portati_da(agente):
+            continue
+        candidati.append({"agente": agente, "oggetto": None, "fonte": fonte})
     return candidati
 
 
@@ -280,7 +291,8 @@ AZIONE_TIRARE_FUORI = Azione("tirare_fuori", _tirare_fuori_candidati,
 def _dare_candidati(stato: StatoMondo, agente: str) -> list[dict]:
     luogo = stato.persone[agente].luogo
     oggetti = stato.oggetti_portati_da(agente)
-    destinatari = [pid for pid, pp in stato.persone.items() if pp.luogo == luogo and pid != agente]
+    destinatari = [pid for pid, pp in stato.persone.items()
+                   if pp.luogo == luogo and pid != agente and not pp.addormentato]
     return [{"agente": agente, "oggetto": oid, "destinatario": did} for oid in oggetti for did in destinatari]
 
 
@@ -428,7 +440,8 @@ AZIONE_GUARDARE = Azione("guardare", _guardare_candidati, _guardare_precondizion
 def _dire_candidati(stato: StatoMondo, agente: str) -> list[dict]:
     luogo = stato.persone[agente].luogo
     return [{"agente": agente, "destinatario": pid}
-            for pid, pp in stato.persone.items() if pp.luogo == luogo and pid != agente]
+            for pid, pp in stato.persone.items()
+            if pp.luogo == luogo and pid != agente and not pp.addormentato]
 
 
 def _dire_precondizioni(stato: StatoMondo, p: dict) -> bool:
@@ -451,26 +464,41 @@ AZIONE_DIRE = Azione("dire", _dire_candidati, _dire_precondizioni, _dire_effetti
 # ---------------------------------------------------------------------------
 
 def _dormire_candidati(stato: StatoMondo, agente: str) -> list[dict]:
-    return [{"agente": agente}]
+    if _dormire_precondizioni(stato, {"agente": agente}):
+        return [{"agente": agente}]
+    return []
 
 
 def _dormire_precondizioni(stato: StatoMondo, p: dict) -> bool:
-    return not stato.persone[p["agente"]].addormentato
+    persona = stato.persone[p["agente"]]
+    # Niente pisolini da riposati: sotto SOGLIA_PISOLINO non ci si addormenta.
+    return not persona.addormentato and persona.stanchezza >= dm.SOGLIA_PISOLINO
 
 
 def _dormire_effetti(stato: StatoMondo, p: dict, t: int) -> Evento:
     agente = p["agente"]
-    luogo = stato.persone[agente].luogo
-    stato.persone[agente].addormentato = True
-    stato.persone[agente].stanchezza = 0
-    return Evento(t=t, azione="dormire", agente=agente, luogo=luogo, testimoni=stato.testimoni_in(luogo))
+    persona = stato.persone[agente]
+    luogo = persona.luogo
+    # Testimoni PRIMA di addormentarsi: chi si addormenta vede sé stesso farlo.
+    testimoni = stato.testimoni_in(luogo)
+    # La causa è un fatto del mondo, registrato nell'evento: "stanchezza" solo
+    # se il sonno è dettato dall'esaustione; un pisolino volontario non ha una
+    # causa determinabile (la domanda "perché dorme?" avrà oro "non-lo-so").
+    # La stanchezza NON si azzera qui: si recupera tick per tick dormendo
+    # (motore._aggiorna_fisiologia), il sonno dura più tick.
+    causa = "stanchezza" if persona.stanchezza >= dm.SOGLIA_ESAUSTO_PER_ETA[persona.eta] else None
+    persona.addormentato = True
+    return Evento(t=t, azione="dormire", agente=agente, luogo=luogo,
+                  argomento=causa, testimoni=testimoni)
 
 
 AZIONE_DORMIRE = Azione("dormire", _dormire_candidati, _dormire_precondizioni, _dormire_effetti)
 
 
 def _svegliarsi_candidati(stato: StatoMondo, agente: str) -> list[dict]:
-    return [{"agente": agente}]
+    if stato.persone[agente].addormentato:
+        return [{"agente": agente}]
+    return []
 
 
 def _svegliarsi_precondizioni(stato: StatoMondo, p: dict) -> bool:
@@ -525,8 +553,21 @@ AZIONE_GIOCARE = Azione("giocare", _giocare_candidati, _giocare_precondizioni, _
 
 def _cercare_candidati(stato: StatoMondo, agente: str) -> list[dict]:
     luogo = stato.persone[agente].luogo
-    return [{"agente": agente, "oggetto": oid} for oid, o in stato.oggetti.items()
-            if stato.luogo_effettivo(oid) != luogo]
+    candidati = []
+    luogo_contenitore: dict[str, str] = {}  # memo, come in _oggetti_raggiungibili
+    for oid, o in stato.oggetti.items():
+        tipo, rif = o.posizione
+        if tipo == "luogo":
+            altrove = rif != luogo
+        elif tipo == "persona":
+            altrove = stato.persone[rif].luogo != luogo
+        else:
+            if rif not in luogo_contenitore:
+                luogo_contenitore[rif] = stato.luogo_effettivo(rif)
+            altrove = luogo_contenitore[rif] != luogo
+        if altrove:
+            candidati.append({"agente": agente, "oggetto": oid})
+    return candidati
 
 
 def _cercare_precondizioni(stato: StatoMondo, p: dict) -> bool:

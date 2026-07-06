@@ -53,14 +53,10 @@ PERSONE: tuple[Persona, ...] = (
     Persona(id="luca", lemma="Luca", genere="m", eta="bambino", luogo_preferito=None),
 )
 
-LUOGO_INIZIALE: dict[str, str] = {
-    "anna": "cucina",
-    "piero": "orto",
-    "maria": "cucina",
-    "marco": "salotto",
-    "sara": "giardino",
-    "luca": "giardino",
-}
+# Le posizioni iniziali di persone e oggetti NON sono elencate qui: sono
+# fatti contingenti, estratti a caso per ogni seed in costruisci_stato_iniziale
+# (FASE0.md, "stato iniziale ignoto"). Qui vivono solo i fatti strutturali,
+# identici in ogni storia.
 
 # Parentela: relazioni di base (non simmetriche); le relazioni derivate
 # (figlio_di, fratello_di, nonno_di, moglie_di, ...) si calcolano da queste
@@ -97,37 +93,31 @@ OGGETTI_UNICI: tuple[TipoOggetto, ...] = (
     TipoOggetto(lemma="camino", contenitore=True, apribile=False, fisso=True),
 )
 
-# Dove si trova ciascun oggetto unico all'inizio della storia.
-LUOGO_INIZIALE_OGGETTO: dict[str, str] = {
-    "pane": "cucina",
-    "palla": "giardino",
-    "cestino": "cucina",
-    "scatola": "salotto",
-    "secchio": "cucina",
-    "libro": "camera",
+# Gli arredi (fisso=True) sono struttura della casa, non fatti contingenti:
+# il loro luogo è fisso e uguale in ogni storia.
+LUOGO_ARREDO: dict[str, str] = {
     "camino": "salotto",
 }
 
-# Possesso statico iniziale (di chi è, indipendentemente da chi lo porta ora).
-PROPRIETARIO_INIZIALE: dict[str, str] = {
-    "palla": "sara",
-    "libro": "piero",
-}
-
-# Lo stato "aperto/chiuso" iniziale dei contenitori apribili.
-APERTO_INIZIALE: dict[str, bool] = {
-    "scatola": False,
-}
+# Probabilità che un oggetto unico non-contenitore inizi DENTRO un contenitore
+# (chiuso o aperto) invece che appoggiato in un luogo: dà un contenuto
+# iniziale sconosciuto ai contenitori, così "quanti oggetti ci sono in X?"
+# non è mai banalmente derivabile dalla sola regola "i contenitori iniziano
+# vuoti". Alza anche il numero di oggetti mai localizzati in una storia,
+# cioè il bacino delle domande "non lo so" su posizione e possesso.
+PROB_INIZIO_IN_CONTENITORE = 0.35
 
 
 # ---------------------------------------------------------------------------
-# Risorse finite: fonte -> (lemma dell'unità, quantità iniziale, luogo)
+# Risorse finite: fonte -> (lemma dell'unità, intervallo quantità, luogo)
+# La quantità iniziale è un fatto contingente: estratta per seed
+# nell'intervallo [quantita_min, quantita_max].
 # ---------------------------------------------------------------------------
 
 RISORSE: dict[str, dict] = {
-    "melo": {"lemma_unita": "mela", "quantita_iniziale": 8, "luogo": "orto", "commestibile": True},
-    "pozzo": {"lemma_unita": "acqua", "quantita_iniziale": 20, "luogo": "orto", "commestibile": False},
-    "bosco_legna": {"lemma_unita": "legna", "quantita_iniziale": 15, "luogo": "bosco", "commestibile": False},
+    "melo": {"lemma_unita": "mela", "quantita_min": 4, "quantita_max": 12, "luogo": "orto", "commestibile": True},
+    "pozzo": {"lemma_unita": "acqua", "quantita_min": 10, "quantita_max": 30, "luogo": "orto", "commestibile": False},
+    "bosco_legna": {"lemma_unita": "legna", "quantita_min": 8, "quantita_max": 20, "luogo": "bosco", "commestibile": False},
 }
 
 # Attrezzo richiesto per raccogliere da una fonte (None = nessuno richiesto).
@@ -143,4 +133,11 @@ SOGLIA_MASSIMA = 10
 # un crollo simultaneo di tutta la famiglia allo stesso tick.
 SOGLIA_ESAUSTO_PER_ETA = {"bambino": 8, "adulto": 10, "anziano": 9}
 RISTORO_FAME_MANGIARE = 5
-RISTORO_STANCHEZZA_DORMIRE = 10  # dormire azzera la stanchezza
+# Sotto questa stanchezza non ci si addormenta volontariamente: evita i
+# pisolini a stanchezza zero, che riempivano le storie di rumore
+# dormire/svegliarsi (~50% degli eventi) e rendevano indeterminabile la
+# causa del sonno.
+SOGLIA_PISOLINO = 6
+# Il sonno dura più tick: ogni tick dormito recupera questa quantità di
+# stanchezza, ci si sveglia quando arriva a zero.
+RECUPERO_STANCHEZZA_PER_TICK = 3

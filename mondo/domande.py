@@ -11,16 +11,20 @@ Ogni tipo di domanda mescola istanze derivabili e istanze la cui risposta
 d'oro è "non lo so": la non-derivabilità è verificata formalmente (si
 controlla l'assenza del fatto negli eventi/relazioni), non indovinata.
 
-Nota su "parentela": con una sola famiglia chiusa di 6 persone, il calcolo
-in parentela.py copre TUTTE le coppie (nessuna richiede più di 2 passi) —
-quindi questo tipo, con questo mondo, non produce istanze "non lo so" per
-costruzione, non per una svista. Le altre 6 categorie compensano: la quota
-media resta nella fascia 15-20% richiesta da FASE0.md punto 8 (verificato
-in statistiche.py).
+Epistemica (FASE0.md): lo stato INIZIALE è contingente, estratto per seed e
+mai rivelato al lettore; un fatto è conoscibile solo se stabilito dagli
+eventi. Le regole strutturali del mondo (mappa, famiglia, arredi, "le mani
+iniziano vuote") sono invece conoscenza di sfondo, identica in ogni storia.
+
+Nota su "parentela": la famiglia è struttura fissa (conoscenza di sfondo) e
+con 6 persone il calcolo in parentela.py copre TUTTE le coppie — quindi
+questo tipo non produce istanze "non lo so" per costruzione, non per una
+svista (deviazione da FASE0.md punto 8 accettata e documentata lì).
 """
 from __future__ import annotations
 
 import random
+from collections import Counter
 from dataclasses import dataclass
 
 from . import dati_mondo as dm
@@ -29,23 +33,21 @@ from .grafo import NON_LO_SO, Grafo, grafo_a_dict, grafo_fatto
 from .simulatore import Storia
 
 # Quota di "non lo so" richiesta per tipo (~15-20% indicato da FASE0.md,
-# punto 8). Non tutti i tipi hanno lo stesso margine in un mondo piccolo e
-# molto interattivo come questo: posizione/possesso/conteggio/causa hanno un
-# "bacino" naturale di fatti-non-menzionati piuttosto piccolo (pochi oggetti,
-# pochi personaggi), quindi si richiede una quota più alta per avvicinarsi
-# comunque al target; transfer/deduzione hanno invece un bacino di coppie
-# non-avvenute enorme (quasi ogni combinazione oggetto-destinatario non è mai
-# stata data), quindi una quota più bassa evita di sforare molto oltre il
-# 20%. parentela resta a 0% per costruzione con questa famiglia chiusa (vedi
-# nota nel docstring del modulo) e non ha una propria quota da tarare.
+# punto 8). Non tutti i tipi hanno lo stesso margine: transfer/deduzione
+# hanno un bacino di coppie non-avvenute enorme (quasi ogni combinazione
+# oggetto-destinatario non è mai stata data), quindi una quota bassa evita
+# di sforare molto oltre il 20%; gli altri tipi hanno bacini più piccoli e
+# chiedono una quota più alta per avvicinarsi al target. parentela resta a
+# 0% per costruzione (vedi nota nel docstring del modulo) e non ha una
+# propria quota da tarare. Le quote effettive si verificano in statistiche.py.
 QUOTA_NON_LO_SO_PER_TIPO = {
-    "posizione": 0.35,
-    "possesso": 0.35,
-    "conteggio": 0.35,
+    "posizione": 0.30,
+    "possesso": 0.30,
+    "conteggio": 0.30,
     "transfer": 0.12,
     "parentela": 0.18,
     "deduzione": 0.12,
-    "causa": 0.35,
+    "causa": 0.30,
 }
 
 
@@ -126,25 +128,15 @@ def _genera_possesso(storia: Storia, rng: random.Random, n: int) -> list[Domanda
     mai_localizzati = _oggetti_mai_localizzati(storia)
     oggetti = list(stato.oggetti.keys())
 
-    # Solo la parte dinamica può generare "non lo so" (il possesso statico è
-    # un fatto sempre noto): le si lascia più spazio apposta.
-    n_statico = max(1, n // 4)
-    n_dinamico = n - n_statico
-
+    # Solo "Chi ha X adesso?" (possesso dinamico). Il possesso statico
+    # ("Di chi è X?") non esiste più: con lo stato iniziale estratto per seed
+    # la proprietà non è mai rivelata dagli eventi, quindi non sarebbe MAI
+    # derivabile — tornerà quando ci sarà un meccanismo di rivelazione
+    # (FASE0.md, "stato iniziale ignoto").
     domande: list[Domanda] = []
-
-    # "Di chi è X?" — possesso statico, sempre un fatto noto (anche "di nessuno").
-    for oid in rng.sample(oggetti, min(n_statico, len(oggetti))):
-        o = stato.oggetti[oid]
-        grafo_domanda = grafo_fatto("essere", nsubj=oid, quesito="di-chi")
-        proprietario = o.proprietario if o.proprietario is not None else "nessuno"
-        risposta = grafo_fatto("essere", nsubj=oid, **{"nmod:possesso": proprietario})
-        domande.append(Domanda("possesso", grafo_domanda, risposta))
-
-    # "Chi ha X adesso?" — dinamico: non derivabile se X non è mai stato localizzato.
     derivabili = [oid for oid in oggetti if oid not in mai_localizzati]
     non_derivabili = list(mai_localizzati)
-    for oid in _mescola(rng, "possesso", derivabili, non_derivabili, n_dinamico):
+    for oid in _mescola(rng, "possesso", derivabili, non_derivabili, n):
         grafo_domanda = grafo_fatto("avere", obj=oid, quesito="chi")
         if oid in mai_localizzati:
             risposta = NON_LO_SO
@@ -164,30 +156,36 @@ def _genera_possesso(storia: Storia, rng: random.Random, n: int) -> list[Domanda
 def _genera_conteggio(storia: Storia, rng: random.Random, n: int) -> list[Domanda]:
     stato = storia.stato_finale
     mai_localizzati = _oggetti_mai_localizzati(storia)
-    contenitori = [oid for oid, o in stato.oggetti.items() if o.contenitore]
-    luoghi = list(stato.luoghi.keys())
+    # Conoscenza completa = ogni oggetto è stato localizzato da almeno un
+    # evento: solo allora i conteggi "in un posto" sono derivabili, perché
+    # un oggetto mai menzionato potrebbe trovarsi proprio lì.
+    conoscenza_completa = not mai_localizzati
 
-    # Solo i contenitori mai toccati possono dare "non lo so" (il conteggio
-    # in un luogo è sempre un fatto noto): si dà loro più spazio apposta.
-    n_luogo = max(1, n // 4)
-    n_contenitore = n - n_luogo
+    # "Quanti oggetti porta X?" — derivabile SEMPRE: le mani iniziano vuote
+    # (regola strutturale del mondo) e ogni prendere/dare/posare/mangiare è
+    # un evento visibile, quindi il carico di X si ricostruisce per intero.
+    bersagli_persona = [("persona", pid) for pid in stato.persone]
+    # "Quanti oggetti ci sono in Y?" — luogo o contenitore.
+    bersagli_posto = ([("luogo", lid) for lid in stato.luoghi]
+                      + [("contenitore", cid) for cid, o in stato.oggetti.items() if o.contenitore])
 
-    scelte = [("luogo", lid) for lid in rng.sample(luoghi, min(n_luogo, len(luoghi)))]
-
-    bersagli_contenitore_derivabili = [("contenitore", cid) for cid in contenitori if cid not in mai_localizzati]
-    bersagli_contenitore_non_derivabili = [("contenitore", cid) for cid in contenitori if cid in mai_localizzati]
-    scelte += _mescola(rng, "conteggio", bersagli_contenitore_derivabili,
-                        bersagli_contenitore_non_derivabili, n_contenitore)
+    derivabili = bersagli_persona + (bersagli_posto if conoscenza_completa else [])
+    non_derivabili = [] if conoscenza_completa else bersagli_posto
 
     domande = []
-    for tipo_bersaglio, bid in scelte:
-        grafo_domanda = grafo_fatto("esserci", **{"obl:luogo": bid, "quesito": "quanti"})
-        if tipo_bersaglio == "contenitore" and bid in mai_localizzati:
-            risposta = NON_LO_SO
+    for tipo_bersaglio, bid in _mescola(rng, "conteggio", derivabili, non_derivabili, n):
+        if tipo_bersaglio == "persona":
+            grafo_domanda = grafo_fatto("portare", nsubj=bid, quesito="quanti")
+            quantita = len(stato.oggetti_portati_da(bid))
+            risposta = grafo_fatto("portare", nsubj=bid, **{"obl:quantita": str(quantita)})
         else:
-            quantita = (len(stato.oggetti_in_luogo(bid)) if tipo_bersaglio == "luogo"
-                        else len(stato.oggetti_dentro(bid)))
-            risposta = grafo_fatto("esserci", **{"obl:luogo": bid, "obl:quantita": str(quantita)})
+            grafo_domanda = grafo_fatto("esserci", **{"obl:luogo": bid, "quesito": "quanti"})
+            if not conoscenza_completa:
+                risposta = NON_LO_SO
+            else:
+                quantita = (len(stato.oggetti_in_luogo(bid)) if tipo_bersaglio == "luogo"
+                            else len(stato.oggetti_dentro(bid)))
+                risposta = grafo_fatto("esserci", **{"obl:luogo": bid, "obl:quantita": str(quantita)})
         domande.append(Domanda("conteggio", grafo_domanda, risposta))
     return domande
 
@@ -276,34 +274,49 @@ def _genera_deduzione(storia: Storia, rng: random.Random, n: int) -> list[Domand
 
 
 # ---------------------------------------------------------------------------
-# 7. causa/energia: "Perché X dorme?" e "Quante mele restano?"
+# 7. causa/energia: "Perché X dorme?" e "Quante mele sono state raccolte?"
 # ---------------------------------------------------------------------------
 
 def _genera_causa(storia: Storia, rng: random.Random, n: int) -> list[Domanda]:
-    stato = storia.stato_finale
-    persone_addormentate = sorted({e.agente for e in storia.eventi if e.azione == "dormire"})
-    persone_mai_addormentate = [pid for pid in stato.persone if pid not in persone_addormentate]
+    # Le cause dei sonni, come registrate negli eventi: "stanchezza" se il
+    # sonno era dettato dall'esaustione, None per i pisolini volontari (la
+    # cui causa non è un fatto del mondo). Si domanda solo di chi ha dormito,
+    # e solo se TUTTI i suoi sonni hanno la stessa causa: la domanda non ha
+    # ancora un ancoraggio temporale, con cause miste sarebbe ambigua — e le
+    # risposte d'oro non devono mai essere ambigue.
+    cause_sonni: dict[str, list] = {}
+    for e in storia.eventi:
+        if e.azione == "dormire":
+            cause_sonni.setdefault(e.agente, []).append(e.argomento)
 
-    # Solo la parte "perché dorme" può dare "non lo so" (il conteggio delle
-    # risorse è sempre calcolabile dagli eventi): le si lascia più spazio.
+    derivabili = sorted(pid for pid, cause in cause_sonni.items()
+                        if all(c == "stanchezza" for c in cause))
+    non_derivabili = sorted(pid for pid, cause in cause_sonni.items()
+                            if all(c is None for c in cause))
+
     n_causa = max(1, (3 * n) // 4)
     n_risorsa = n - n_causa
 
     domande = []
-    for pid in _mescola(rng, "causa", persone_addormentate, persone_mai_addormentate, n_causa):
+    for pid in _mescola(rng, "causa", derivabili, non_derivabili, n_causa):
         grafo_domanda = grafo_fatto("dormire", nsubj=pid, quesito="perche")
-        if pid in persone_addormentate:
+        if pid in derivabili:
             risposta = grafo_fatto("dormire", nsubj=pid, **{"advcl:causa": "stanchezza"})
         else:
             risposta = NON_LO_SO
         domande.append(Domanda("causa", grafo_domanda, risposta))
 
-    fonti = list(dm.RISORSE.keys())
-    for fonte in rng.sample(fonti, min(n_risorsa, len(fonti))) if fonti else []:
+    # "Quante X sono state raccolte?" — derivabile per puro conteggio di
+    # eventi. ("Quante restano?" non è più una domanda lecita: la quantità
+    # iniziale della fonte è un fatto contingente mai rivelato dagli eventi.)
+    raccolte = Counter(e.argomento for e in storia.eventi
+                       if e.azione == "prendere" and e.argomento is not None)
+    fonti = sorted(dm.RISORSE.keys())
+    for fonte in rng.sample(fonti, min(n_risorsa, len(fonti))):
         info = dm.RISORSE[fonte]
-        grafo_domanda = grafo_fatto("restare", nsubj=info["lemma_unita"], quesito="quante")
-        quantita = stato.risorse[fonte]
-        risposta = grafo_fatto("restare", nsubj=info["lemma_unita"], **{"obl:quantita": str(quantita)})
+        grafo_domanda = grafo_fatto("raccogliere", obj=info["lemma_unita"], quesito="quante")
+        risposta = grafo_fatto("raccogliere", obj=info["lemma_unita"],
+                               **{"obl:quantita": str(raccolte.get(fonte, 0))})
         domande.append(Domanda("causa", grafo_domanda, risposta))
 
     return domande

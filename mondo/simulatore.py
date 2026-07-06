@@ -19,10 +19,10 @@ class Storia:
 
 def genera_storia(seed: int, n_tick: int = 30) -> Storia:
     """Genera una storia deterministica: `seed` istanzia l'UNICO random.Random
-    usato per tutte le scelte della politica dei personaggi (mai `random`
-    globale)."""
+    usato sia per lo stato iniziale (contingente, estratto per seed) sia per
+    tutte le scelte della politica dei personaggi (mai `random` globale)."""
     rng = random.Random(seed)
-    stato = costruisci_stato_iniziale()
+    stato = costruisci_stato_iniziale(rng)
     eventi: list[Evento] = []
     for t in range(1, n_tick + 1):
         eventi.extend(avanza_tick(stato, rng, t))

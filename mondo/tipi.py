@@ -64,7 +64,6 @@ class StatoOggetto:
     #   ("persona", persona_id)  -> portato/in mano a una persona
     #   ("contenitore", oggetto_id) -> dentro un contenitore
     posizione: tuple[str, str] = field(default=("luogo", ""))
-    proprietario: Optional[str] = None  # possesso statico (di chi è), non chi lo porta ora
 
 
 @dataclass
@@ -127,6 +126,10 @@ class StatoMondo:
     persone: dict[str, StatoPersona]
     oggetti: dict[str, StatoOggetto]
     risorse: dict[str, int]  # "melo" -> mele rimaste, "pozzo" -> acqua, "bosco" -> legna
+    # quantità estratte per seed all'inizio della storia (fatti contingenti):
+    # servono a verificare l'invariante di conservazione, NON sono conoscibili
+    # dal lettore della storia.
+    risorse_iniziali: dict[str, int] = field(default_factory=dict)
     prossimo_id_istanza: dict[str, int] = field(default_factory=dict)
 
     # -- letture sullo stato, usate da azioni.py, motore.py, domande.py -----
@@ -146,7 +149,12 @@ class StatoMondo:
         raise ValueError(f"posizione sconosciuta per {entita_id}: {ogg.posizione}")
 
     def testimoni_in(self, luogo_id: str) -> tuple[str, ...]:
-        presenti = [p.id for p in self.persone.values() if p.luogo == luogo_id]
+        """Chi vede un evento in questo luogo: i presenti SVEGLI (chi dorme
+        è presente ma non vede — conta per la teoria della mente, stadio 6)."""
+        presenti = [
+            p.id for p in self.persone.values()
+            if p.luogo == luogo_id and not p.addormentato
+        ]
         return tuple(sorted(presenti))
 
     def oggetti_in_luogo(self, luogo_id: str) -> list[str]:
