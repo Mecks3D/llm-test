@@ -46,3 +46,11 @@ def verbalizza_storia(grafi: Sequence[Grafo], contesto: StatoDiscorso | None = N
     if contesto is None:
         contesto = StatoDiscorso()
     return [verbalizza_evento(grafo, contesto) for grafo in grafi]
+
+
+def verbalizza_domanda(grafo: Grafo, contesto: StatoDiscorso) -> str:
+    return stampi.rendi_domanda(grafo, contesto)
+
+
+def verbalizza_risposta(grafo: Grafo, contesto: StatoDiscorso) -> str:
+    return stampi.rendi_risposta(grafo, contesto)

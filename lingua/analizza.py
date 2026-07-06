@@ -27,3 +27,11 @@ def analizza_storia(frasi: Sequence[str], contesto: StatoDiscorso | None = None)
     if contesto is None:
         contesto = StatoDiscorso()
     return [analizza_evento(frase, contesto) for frase in frasi]
+
+
+def analizza_domanda(frase: str, contesto: StatoDiscorso) -> Grafo:
+    return stampi.analizza_domanda(frase, contesto)
+
+
+def analizza_risposta(frase: str, contesto: StatoDiscorso) -> Grafo:
+    return stampi.analizza_risposta(frase, contesto)

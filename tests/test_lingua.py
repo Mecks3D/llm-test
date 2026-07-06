@@ -303,3 +303,96 @@ class TestRoundTripEventi:
     def test_frase_malformata_solleva_valueerror(self):
         with pytest.raises(ValueError):
             analizza_evento("Questa non è una frase valida.", StatoDiscorso())
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 4: golden domande/risposte (contesto: fine sequenza A)
+# ---------------------------------------------------------------------------
+
+from mondo.grafo import NON_LO_SO, grafo_fatto
+from lingua.verbalizza import verbalizza_domanda, verbalizza_risposta
+from lingua.analizza import analizza_domanda, analizza_risposta
+
+
+def _contesto_fine_sequenza_a() -> StatoDiscorso:
+    contesto = StatoDiscorso()
+    for evento, _ in SEQUENZA_A:
+        verbalizza_evento(evento_a_grafo(evento), contesto)
+    return contesto
+
+
+CASI_DOMANDE_RISPOSTE = [
+    (grafo_fatto("trovarsi", nsubj="mela_1", quesito="dove"), "Dove si trova la prima mela?"),
+    (grafo_fatto("essere", nsubj="mela_1", **{"obl:luogo": "orto"}), "La prima mela è nell'orto."),
+    (grafo_fatto("avere", obj="secchio", quesito="chi"), "Chi ha il secchio?"),
+    (grafo_fatto("avere", nsubj="nessuno", obj="secchio"), "Nessuno ha il secchio."),
+    (grafo_fatto("portare", nsubj="sara", quesito="quanti"), "Quanti oggetti porta Sara?"),
+    (grafo_fatto("portare", nsubj="sara", **{"obl:quantita": "1"}), "Sara porta un oggetto."),
+    (grafo_fatto("portare", nsubj="sara", **{"obl:quantita": "0"}), "Sara non porta nessun oggetto."),
+    (grafo_fatto("esserci", **{"obl:luogo": "cestino", "quesito": "quanti"}), "Quanti oggetti ci sono nel cestino?"),
+    (grafo_fatto("esserci", **{"obl:luogo": "cestino", "obl:quantita": "1"}), "Nel cestino c'è un oggetto."),
+    (grafo_fatto("esserci", **{"obl:luogo": "cucina", "quesito": "quanti"}), "Quanti oggetti ci sono in cucina?"),
+    (grafo_fatto("esserci", **{"obl:luogo": "cucina", "obl:quantita": "3"}), "In cucina ci sono tre oggetti."),
+    (grafo_fatto("dare", obj="mela_2", iobj="sara", quesito="chi"), "Chi ha dato la seconda mela a Sara?"),
+    (grafo_fatto("dare", nsubj="piero", obj="mela_2", iobj="sara"), "Piero ha dato la seconda mela a Sara."),
+    (grafo_fatto("essere", nsubj="anna", **{"nmod:relativo": "maria", "quesito": "che-parente"}),
+     "Che parente è Anna di Maria?"),
+    (grafo_fatto("essere", nsubj="anna", **{"nmod:parentela": "madre_di", "nmod:relativo": "maria"}),
+     "Anna è la madre di Maria."),
+    (grafo_fatto("essere", nsubj="piero", **{"nmod:parentela": "zio_di", "nmod:relativo": "sara"}),
+     "Piero è lo zio di Sara."),
+    (grafo_fatto("essere", nsubj="sara", **{"nmod:parentela": "nipote_di", "nmod:relativo": "piero"}),
+     "Sara è la nipote di Piero."),
+    (grafo_fatto("trovarsi", **{"nmod:agente": "qualcuno", "nmod:oggetto": "mela_2",
+                                 "nmod:destinatario": "sara", "quesito": "dove"}),
+     "Dove si trova la seconda mela che qualcuno ha dato a Sara?"),
+    (NON_LO_SO, "Non lo so."),
+    (grafo_fatto("dormire", nsubj="luca", quesito="perche"), "Perché Luca dorme?"),
+    (grafo_fatto("dormire", nsubj="luca", **{"advcl:causa": "stanchezza"}), "Luca dorme perché è stanco."),
+    (grafo_fatto("raccogliere", obj="mela", quesito="quante"), "Quante mele sono state raccolte?"),
+    (grafo_fatto("raccogliere", obj="mela", **{"obl:quantita": "2"}), "Sono state raccolte due mele."),
+    (grafo_fatto("raccogliere", obj="acqua", quesito="quante"), "Quante volte è stata raccolta l'acqua?"),
+    (grafo_fatto("raccogliere", obj="acqua", **{"obl:quantita": "1"}), "L'acqua è stata raccolta una volta."),
+]
+
+
+class TestGoldenDomandeRisposte:
+    def test_verbalizza_e_analizza(self):
+        cv = _contesto_fine_sequenza_a()
+        cp = _contesto_fine_sequenza_a()
+        for grafo, frase_attesa in CASI_DOMANDE_RISPOSTE:
+            e_domanda = frase_attesa.endswith("?")
+            rendi = verbalizza_domanda if e_domanda else verbalizza_risposta
+            analizza = analizza_domanda if e_domanda else analizza_risposta
+            frase = rendi(grafo, cv)
+            assert frase == frase_attesa, f"{grafo} -> {frase!r} != {frase_attesa!r}"
+            ricostruito = analizza(frase_attesa, cp)
+            assert ricostruito == grafo, f"{frase_attesa!r} -> {ricostruito} != {grafo}"
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 5: round-trip completo (eventi + domande + risposte), seed 0-299
+# ---------------------------------------------------------------------------
+
+import random
+
+from mondo.domande import genera_domande
+
+
+class TestRoundTripCompleto:
+    def test_round_trip_completo_seed_0_299(self):
+        for seed in range(300):
+            n_tick = _lunghezza_storia(seed)
+            storia = genera_storia(seed=seed, n_tick=n_tick)
+            grafi = [evento_a_grafo(e) for e in storia.eventi]
+            cv = StatoDiscorso()
+            frasi = _verbalizza_storia(grafi, cv)
+            cp = StatoDiscorso()
+            assert analizza_storia(frasi, cp) == grafi, f"seed {seed}: round-trip eventi fallito"
+
+            rng_domande = random.Random(f"domande-{seed}")
+            for d in genera_domande(storia, rng_domande, n_per_tipo=8):
+                fd = verbalizza_domanda(d.grafo_domanda, cv)
+                assert analizza_domanda(fd, cp) == d.grafo_domanda, f"seed {seed} {d.tipo}: domanda {fd!r}"
+                fr = verbalizza_risposta(d.grafo_risposta, cv)
+                assert analizza_risposta(fr, cp) == d.grafo_risposta, f"seed {seed} {d.tipo}: risposta {fr!r}"
