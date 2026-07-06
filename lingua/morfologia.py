@@ -73,6 +73,11 @@ def prep_articolata(prep: str, lemma: str) -> str:
     return _PREP_ARTICOLATA[chiave]
 
 
+# Tutte le forme fuse preposizione+articolo coperte (usato dal formario,
+# lingua/formario.py: sono combinatorie, non legate a un lemma specifico).
+TUTTE_LE_PREPOSIZIONI_ARTICOLATE: tuple[str, ...] = tuple(_PREP_ARTICOLATA.values())
+
+
 def unisci(primo: str, secondo: str) -> str:
     """Accosta due pezzi di frase, senza spazio se il primo elide (finisce
     in apostrofo): unisci("l'", "acqua") -> "l'acqua", unisci("la", "legna")

@@ -434,3 +434,61 @@ class TestFiltro:
             for d in genera_domande(storia, rng_domande, n_per_tipo=8):
                 assert filtra(d.grafo_domanda).ammesso
                 assert filtra(d.grafo_risposta).ammesso
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 6 e 8: accordo, formario, determinismo (seed 0-99)
+# ---------------------------------------------------------------------------
+
+from lingua.accordo import controlla_accordo
+from lingua.formario import parole_fuori_formario
+
+
+class TestAccordoEFormario:
+    def test_accordo_e_formario_seed_0_99(self):
+        for seed in range(100):
+            n_tick = _lunghezza_storia(seed)
+            storia = genera_storia(seed=seed, n_tick=n_tick)
+            grafi = [evento_a_grafo(e) for e in storia.eventi]
+            cv = StatoDiscorso()
+            frasi = _verbalizza_storia(grafi, cv)
+            rng_domande = random.Random(f"domande-{seed}")
+            for d in genera_domande(storia, rng_domande, n_per_tipo=8):
+                frasi.append(verbalizza_domanda(d.grafo_domanda, cv))
+                frasi.append(verbalizza_risposta(d.grafo_risposta, cv))
+            for frase in frasi:
+                assert controlla_accordo(frase) == [], f"seed {seed}: accordo fallito su {frase!r}"
+                assert parole_fuori_formario(frase) == [], f"seed {seed}: fuori lessico in {frase!r}"
+
+    def test_determinismo_byte_per_byte_seed_42(self):
+        storia = genera_storia(seed=42, n_tick=20)
+        grafi = [evento_a_grafo(e) for e in storia.eventi]
+        frasi1 = _verbalizza_storia(grafi, StatoDiscorso())
+        frasi2 = _verbalizza_storia(grafi, StatoDiscorso())
+        assert frasi1 == frasi2
+        assert "\n".join(frasi1).encode("utf-8") == "\n".join(frasi2).encode("utf-8")
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 9: errori chiari
+# ---------------------------------------------------------------------------
+
+class TestErroriChiari:
+    def test_analizza_evento_azione_sconosciuta(self):
+        with pytest.raises(ValueError):
+            analizza_evento("Alle nove Sara vola in giardino.", StatoDiscorso())
+
+    def test_analizza_domanda_senza_punto_interrogativo(self):
+        with pytest.raises(ValueError):
+            analizza_domanda("Dove si trova Sara", StatoDiscorso())
+
+    def test_analizza_risposta_senza_punto(self):
+        with pytest.raises(ValueError):
+            analizza_risposta("Sara è in giardino", StatoDiscorso())
+
+    def test_sn_inversa_ordinale_oltre_max_indice(self):
+        from lingua.stampi import sn_inversa
+        contesto = StatoDiscorso()
+        contesto.max_indice["mela"] = 1
+        with pytest.raises(ValueError):
+            sn_inversa("la seconda mela", contesto)

@@ -6,7 +6,7 @@ volta (vedi fasi/FASE1_PIANO.md §13); per ora solo il lessico è pronto.
 """
 from __future__ import annotations
 
-from . import morfologia
+from . import accordo, formario, morfologia
 from .analizza import analizza_domanda, analizza_evento, analizza_risposta, analizza_storia
 from .contesto import StatoDiscorso
 from .filtro import RisultatoFiltro, filtra
@@ -20,4 +20,5 @@ __all__ = [
     "analizza_evento", "analizza_storia",
     "analizza_domanda", "analizza_risposta",
     "RisultatoFiltro", "filtra",
+    "accordo", "formario",
 ]

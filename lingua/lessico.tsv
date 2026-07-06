@@ -42,7 +42,7 @@ accadere	PRIM	pos=VERB	-
 muoversi	PRIM	pos=VERB	-
 trovarsi	PRIM	pos=VERB,pres3s=si trova	-
 esserci	PRIM	pos=VERB,pres3s=c'è,pres3p=ci sono	-
-essere	PRIM	pos=VERB,pres3s=è	-
+essere	PRIM	pos=VERB,pres3s=è,ausiliare_f_sing=stata,ausiliare_f_plur=state	-
 mio	PRIM	pos=ADJ	-
 vivere	PRIM	pos=VERB	-
 morire	PRIM	pos=VERB	-
@@ -163,7 +163,7 @@ quanti	INTERR	-	-
 quante	INTERR	-	-
 che-parente	INTERR	superficie=che parente	-
 non-lo-so	SPEC	superficie=Non lo so.	-
-nessuno	PRON	-	-
+nessuno	PRON	apocope_m=nessun,femminile=nessuna	-
 #
 # --- Numeri (NUM, tratti valore=N) ---
 zero	NUM	valore=0	TODO
