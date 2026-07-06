@@ -396,3 +396,41 @@ class TestRoundTripCompleto:
                 assert analizza_domanda(fd, cp) == d.grafo_domanda, f"seed {seed} {d.tipo}: domanda {fd!r}"
                 fr = verbalizza_risposta(d.grafo_risposta, cv)
                 assert analizza_risposta(fr, cp) == d.grafo_risposta, f"seed {seed} {d.tipo}: risposta {fr!r}"
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 7: filtro
+# ---------------------------------------------------------------------------
+
+from lingua.filtro import filtra
+
+
+class TestFiltro:
+    def test_regola_mangiare_palla_scatta(self):
+        grafo = grafo_fatto("mangiare", nsubj="sara", obj="palla")
+        risultato = filtra(grafo)
+        assert risultato.ammesso is False
+        assert risultato.regola_violata is not None
+
+    def test_regola_mangiare_mela_non_scatta(self):
+        grafo = grafo_fatto("mangiare", nsubj="sara", obj="mela_2")
+        assert filtra(grafo).ammesso is True
+
+    def test_regola_bruciare_pane_scatta(self):
+        grafo = grafo_fatto("bruciare", nsubj="camino", obj="pane")
+        assert filtra(grafo).ammesso is False
+
+    def test_non_lo_so_sempre_ammesso(self):
+        assert filtra(NON_LO_SO).ammesso is True
+
+    def test_corpus_sempre_ammesso(self):
+        for seed in range(50):
+            n_tick = _lunghezza_storia(seed)
+            storia = genera_storia(seed=seed, n_tick=n_tick)
+            for evento in storia.eventi:
+                risultato = filtra(evento_a_grafo(evento))
+                assert risultato.ammesso, f"seed {seed}: {evento} violato da {risultato.regola_violata}"
+            rng_domande = random.Random(f"domande-{seed}")
+            for d in genera_domande(storia, rng_domande, n_per_tipo=8):
+                assert filtra(d.grafo_domanda).ammesso
+                assert filtra(d.grafo_risposta).ammesso

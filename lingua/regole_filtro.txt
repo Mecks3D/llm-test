@@ -1,0 +1,6 @@
+# Segnaposto architetturali (FASE1.md): conta la sede, non il contenuto.
+# Sintassi: radice=LEMMA relazione=LEMMA [relazione=LEMMA ...]
+# (le istanze contano per lemma: mela_2 -> lemma "mela")
+radice=mangiare obj=palla
+radice=mangiare obj=libro
+radice=bruciare obj=pane
