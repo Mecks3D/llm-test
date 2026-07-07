@@ -3,6 +3,11 @@ from __future__ import annotations
 
 import pytest
 
+try:
+    import torch
+except ImportError:
+    torch = None  # i test @pytest.mark.torch vengono saltati da tests/conftest.py
+
 from lingua.lessico import ORDINE_PRIM, N_PRIM
 from cervello.vocabolario import (
     RELAZIONI_UD,
@@ -203,3 +208,168 @@ class TestRoundTripMassa:
                     assert token_a_grafo(tok, "fatto") == g, (
                         f"seed {seed} {d.tipo}: round-trip fatto fallito"
                     )
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 4: dati (cervello/dati.py) — richiede torch
+# ---------------------------------------------------------------------------
+
+_ESEMPIO_GOLDEN = (
+    "[STORIA] ( andare ( nsubj sara ) ( obl:luogo cucina ) ( obl:tempo uno ) ) "
+    "[DOMANDA] ( trovarsi ( nsubj sara ) ( quesito dove ) ) "
+    "[RISPOSTA] ( essere ( nsubj sara ) ( obl:luogo cucina ) ) [FINE]"
+).split()
+
+# esempio più corto (storia vuota, risposta non-lo-so), ma con la stessa
+# struttura [STORIA]...[RISPOSTA]...[FINE] di un vero esempio composto.
+_ESEMPIO_CORTO = (
+    "[STORIA] [DOMANDA] ( trovarsi ( nsubj sara ) ( quesito dove ) ) "
+    "[RISPOSTA] ( non-lo-so ) [FINE]"
+).split()
+
+
+@pytest.mark.torch
+class TestDatiMaschera:
+    def test_esempio_golden_composto_correttamente(self):
+        e = Evento(t=1, azione="andare", agente="sara", luogo="cucina")
+        storia_tok = grafo_a_token(evento_a_grafo(e))
+        domanda_tok = grafo_a_token(grafo_fatto("trovarsi", nsubj="sara", quesito="dove"))
+        risposta_tok = grafo_a_token(
+            grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"})
+        )
+        from cervello.sequenza import componi_esempio
+        assert componi_esempio([storia_tok], domanda_tok, risposta_tok) == _ESEMPIO_GOLDEN
+
+    def test_maschera_vera_solo_dopo_risposta_fino_a_fine(self):
+        from cervello.dati import _maschera_piena
+
+        maschera = _maschera_piena(_ESEMPIO_GOLDEN)
+        assert len(maschera) == len(_ESEMPIO_GOLDEN) == 41
+        idx_risposta = _ESEMPIO_GOLDEN.index("[RISPOSTA]")
+        idx_fine = _ESEMPIO_GOLDEN.index("[FINE]")
+        assert idx_risposta == 28 and idx_fine == 40
+
+        atteso = [False] * 29 + [True] * 12  # indici 0-28 False, 29-40 True
+        assert maschera == atteso
+        assert not any(maschera[: idx_risposta + 1])
+        assert all(maschera[idx_risposta + 1 : idx_fine + 1])
+
+
+@pytest.mark.torch
+class TestImpacchettaBatch:
+    def test_padding_e_shift_corretti(self):
+        from cervello.dati import impacchetta_batch
+
+        vocab = carica_vocabolario()
+        corto = _ESEMPIO_CORTO
+        lungo = _ESEMPIO_GOLDEN
+
+        batch = impacchetta_batch([corto, lungo], vocab)
+        T = len(lungo) - 1
+        assert batch.input.shape == (2, T)
+        assert batch.bersaglio.shape == (2, T)
+        assert batch.maschera.shape == (2, T)
+
+        # riga 0 (corto, 18 token -> 17 posizioni di shift), poi tutto [PAD]
+        id_pad = vocab.id("[PAD]")
+        n_corto = len(corto) - 1
+        assert batch.input[0, 0].item() == vocab.id("[STORIA]")
+        ids_attesi = [vocab.id(t) for t in corto]
+        assert batch.input[0, :n_corto].tolist() == ids_attesi[:-1]
+        assert batch.bersaglio[0, :n_corto].tolist() == ids_attesi[1:]
+        assert batch.maschera[0, :n_corto].sum().item() == 4  # ( non-lo-so ) [FINE]
+        assert torch.all(batch.input[0, n_corto:] == id_pad)
+        assert torch.all(batch.bersaglio[0, n_corto:] == id_pad)
+        assert not torch.any(batch.maschera[0, n_corto:])  # padding esclude dalla loss
+
+        # riga 1 (lungo): shift esatto su tutta la riga, nessun padding
+        assert batch.input[1, 0].item() == vocab.id("[STORIA]")
+        assert batch.bersaglio[1, -1].item() == vocab.id("[FINE]")
+        assert batch.maschera[1].sum().item() == 12  # le 12 posizioni di risposta+[FINE]
+
+    def test_batch_vuoto_solleva(self):
+        from cervello.dati import impacchetta_batch
+
+        with pytest.raises(ValueError):
+            impacchetta_batch([], carica_vocabolario())
+
+
+@pytest.mark.torch
+class TestGeneraBatch:
+    def test_mescola_e_copre_tutti_gli_esempi(self):
+        from cervello.dati import genera_batch
+
+        vocab = carica_vocabolario()
+        esempi = [_ESEMPIO_GOLDEN, _ESEMPIO_CORTO, _ESEMPIO_GOLDEN, _ESEMPIO_CORTO, _ESEMPIO_GOLDEN]
+        rng = random.Random("epoca-0")
+        batch = list(genera_batch(esempi, vocab, batch_size=2, rng=rng))
+        assert sum(b.input.shape[0] for b in batch) == len(esempi)
+        assert len(batch) == 3  # 2 + 2 + 1
+
+    def test_determinismo_stesso_rng_seed(self):
+        from cervello.dati import genera_batch
+
+        vocab = carica_vocabolario()
+        esempi = [_ESEMPIO_GOLDEN, _ESEMPIO_CORTO, _ESEMPIO_GOLDEN]
+        b1 = list(genera_batch(esempi, vocab, batch_size=2, rng=random.Random("seme-x")))
+        b2 = list(genera_batch(esempi, vocab, batch_size=2, rng=random.Random("seme-x")))
+        for x, y in zip(b1, b2):
+            assert torch.equal(x.input, y.input)
+            assert torch.equal(x.bersaglio, y.bersaglio)
+            assert torch.equal(x.maschera, y.maschera)
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 5: modello (cervello/modello.py) — richiede torch
+# ---------------------------------------------------------------------------
+
+@pytest.mark.torch
+class TestModello:
+    def _config(self):
+        from cervello.modello import ConfigModello
+        vocab = carica_vocabolario()
+        return ConfigModello(vocab_size=vocab.dimensione, ctx=3072)
+
+    def test_forward_shape(self):
+        from cervello.modello import Modello
+        torch.manual_seed(0)
+        m = Modello(self._config())
+        x = torch.randint(0, self._config().vocab_size, (2, 17))
+        logits = m(x)
+        assert logits.shape == (2, 17, self._config().vocab_size)
+
+    def test_supera_ctx_solleva(self):
+        from cervello.modello import Modello
+        torch.manual_seed(0)
+        cfg = self._config()
+        m = Modello(cfg)
+        x = torch.randint(0, cfg.vocab_size, (1, cfg.ctx + 1))
+        with pytest.raises(ValueError):
+            m(x)
+
+    def test_numero_parametri_circa_7_3m(self):
+        from cervello.modello import Modello
+        torch.manual_seed(0)
+        m = Modello(self._config())
+        n = m.numero_parametri()
+        atteso = 7_300_000
+        assert abs(n - atteso) / atteso <= 0.05, f"{n} parametri, atteso ~{atteso} (±5%)"
+
+    def test_determinismo_stesso_seed(self):
+        from cervello.modello import Modello
+        cfg = self._config()
+        x = torch.randint(0, cfg.vocab_size, (2, 12))
+
+        torch.use_deterministic_algorithms(True)
+        try:
+            torch.manual_seed(123)
+            m1 = Modello(cfg)
+            logits1 = m1(x)
+
+            torch.manual_seed(123)
+            m2 = Modello(cfg)
+            logits2 = m2(x)
+
+            assert torch.equal(logits1, logits2)
+        finally:
+            torch.use_deterministic_algorithms(False)
