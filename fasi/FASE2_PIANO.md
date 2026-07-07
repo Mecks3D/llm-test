@@ -13,6 +13,44 @@ che la v1 float supera gli esami degli stadi 1–3.
 
 ---
 
+## Stato di avanzamento (aggiornato 2026-07-07)
+
+- **T1–T6 fatte, testate, committate** (`635afbd`..`1cfb619`, un commit per
+  tappa). 419 test verdi in locale (`pytest`, esclusi quelli `@pytest.mark.slow`).
+  Vocabolario: 281 token (non ~350 come stimato). Modello: 7.176.960
+  parametri (~7,18M, dentro il ±5% del target 7,3M).
+- **Scoperta operativa durante T4/T5**: questa macchina ha solo CPU (4 core,
+  7,7GB RAM) — impraticabile per il training (misurato: OOM a batch=32/ctx≈717,
+  >30s/step a batch=8/ctx≈360). Andrea ha spostato il training su Colab
+  (GPU): repo pubblico `github.com/Mecks3D/llm-test`, notebook
+  `colab_training.ipynb` in root. **Flusso operativo da qui in avanti**:
+  si scrive/modifica codice in locale, si fa commit e **push su GitHub**,
+  poi Andrea rilancia le celle del notebook **su Colab** per i test pesanti
+  (torch, decodifica, training) — mai localmente. Vedi anche `requirements.txt`.
+- **T5 (canary) superato**: 100% overfit su 32 esempi di stadio 1, verificato
+  su Colab GPU in 25,6s (cella 6b del notebook).
+- **T6 fatta ma il run di fumo non è ancora stato eseguito/riportato**:
+  `cervello/addestra.py` + `esami/esamina.py` scritti e con test gruppo 7
+  verdi (24 test, con un modello iniettato — non serve un training reale).
+  I pezzi "veloci" (ottimizzatore, scheduler LR, accumulo gradiente, loss
+  mascherata) sono verificati in locale. Il pezzo lento (decodifica greedy
+  durante la valutazione su dev) NON è stato verificato end-to-end: un
+  modello appena inizializzato può decodificare fino al tetto `ctx=3072`
+  prima di imparare `[FINE]`, quindi ogni valutazione precoce rischia di
+  essere lenta anche su GPU — da misurare, non assunto.
+  Aggiunto `configs/v1_fumo.yaml` (solo stadio 1, 200 storie, 300 step) e
+  celle dedicate nel notebook (sezione "6c. Run di fumo") per lanciarlo su
+  Colab. **Prossimo passo bloccante**: Andrea deve lanciare quelle celle e
+  riportare il log (`loss_train`, `esattezza_dev`, `token_al_secondo`) per
+  calcolare la stima di durata del curriculum completo — run > 2h non si
+  lanciano senza il suo ok esplicito (decisione 10).
+- **Richiesta di Andrea per la prossima conversazione**: una revisione
+  generale del codice scritto in T1–T6 (non solo dei test) prima di
+  proseguire con T7.
+- Non ancora fatto: T7 (run vero, stadi 1–3).
+
+---
+
 ## 0. Contesto in due paragrafi
 
 Il progetto separa bordi deterministici (Fase 0: `mondo/` genera storie come
