@@ -72,6 +72,7 @@ class EsitoEsempio:
     tipo: str
     categoria: str
     esatto: bool
+    token_generati: list[str]
 
 
 def valuta_esempio(
@@ -95,7 +96,10 @@ def valuta_esempio(
         grafo_generato = None
 
     categoria = _categoria(grafo_oro, grafo_generato)
-    return EsitoEsempio(tipo=esempio["tipo"], categoria=categoria, esatto=categoria == "esatto")
+    return EsitoEsempio(
+        tipo=esempio["tipo"], categoria=categoria, esatto=categoria == "esatto",
+        token_generati=generati_token,
+    )
 
 
 def campiona_per_valutazione(record: list[dict], n: int, rng: random.Random) -> list[dict]:
@@ -107,15 +111,20 @@ def campiona_per_valutazione(record: list[dict], n: int, rng: random.Random) -> 
     return [{"storia": storia, "esempi": [es]} for storia, es in coppie[:n]]
 
 
+MAX_CAMPIONI_NON_ESATTI = 10
+
+
 def valuta_dataset(
     modello: Modello, vocab: Vocabolario, record: list[dict], ctx: int, device: str,
 ) -> dict[str, Any]:
     """Valuta un intero dataset (dev o esame). Ritorna un dict JSON-
-    serializzabile con esattezza totale/per tipo e conteggi di calibrazione
+    serializzabile con esattezza totale/per tipo, conteggi di calibrazione
     (invenzioni, astensioni_errate, malformate — PROGETTO.md, onestà
-    epistemica)."""
+    epistemica) e i primi campioni non esatti (token generati vs oro,
+    per diagnosi: le malformate si guardano, non si indovinano)."""
     totali = {c: 0 for c in CATEGORIE}
     per_tipo: dict[str, dict[str, int]] = {}
+    campioni_non_esatti: list[dict] = []
     n = 0
 
     for r in record:
@@ -126,6 +135,13 @@ def valuta_dataset(
             d = per_tipo.setdefault(esito.tipo, {c: 0 for c in CATEGORIE} | {"n": 0})
             d[esito.categoria] += 1
             d["n"] += 1
+            if not esito.esatto and len(campioni_non_esatti) < MAX_CAMPIONI_NON_ESATTI:
+                campioni_non_esatti.append({
+                    "tipo": esito.tipo,
+                    "categoria": esito.categoria,
+                    "generato": esito.token_generati,
+                    "oro": list(esempio["risposta"]),
+                })
 
     esattezza = totali["esatto"] / n if n else 0.0
     esattezza_per_tipo = {t: (d["esatto"] / d["n"] if d["n"] else 0.0) for t, d in per_tipo.items()}
@@ -136,6 +152,7 @@ def valuta_dataset(
         "esattezza_per_tipo": esattezza_per_tipo,
         "conteggi": totali,
         "conteggi_per_tipo": per_tipo,
+        "campioni_non_esatti": campioni_non_esatti,
     }
 
 

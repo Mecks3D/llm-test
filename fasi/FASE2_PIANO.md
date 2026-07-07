@@ -52,6 +52,17 @@ che la v1 float supera gli esami degli stadi 1–3.
   `esame_stadio1.json` (dominante `errore` = solo poco training;
   `malformata` = indagare). NB: i risultati vivono nel filesystem effimero
   di Colab — la cella 6c ora stampa il JSON e copia tutto su Drive.
+- **Conteggi del fumo (esame, 240 esempi)**: esatto 0, errore 79 (33%:
+  grafo ben formato ma contenuto sbagliato — la grammatica si impara),
+  malformata 141 (59%), invenzione 20 (tutti i non-lo-so sbagliati).
+  Compatibile con un modello sotto-addestrato, ma il 59% di malformate non
+  permette ancora di escludere un problema nella decodifica. Verifica
+  decisiva preparata: `configs/v1_fumo_lungo.yaml` (stadio 1, 1000 storie,
+  max 3000 step, ~20-30 min) + celle "6d" nel notebook — l'esattezza dev
+  DEVE salire sopra lo zero; `esamina.py` ora riporta nel JSON i primi 10
+  campioni non esatti (token generati vs oro) per guardare le malformate.
+  Il numero di step per avvicinare la soglia è anche l'ancora della stima
+  di durata del curriculum (decisione 10).
 - **Revisione generale T1–T6 fatta (2026-07-07)**: codice conforme alle
   decisioni vincolanti. Tre correzioni applicate a `cervello/addestra.py`:
   (1) loss dev calcolata a micro-batch sotto `no_grad` (un batch unico da

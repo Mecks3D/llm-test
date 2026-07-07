@@ -317,6 +317,32 @@ class TestValutaDataset:
         assert esito["esattezza"] == 1.0
         assert esito["conteggi"]["esatto"] == 3
         assert esito["conteggi"]["malformata"] == 0
+        assert esito["campioni_non_esatti"] == []  # tutte esatte: niente campioni
+
+    def test_campioni_non_esatti_riportati_per_diagnosi(self):
+        # un modello che risponde sempre la stessa cosa sbagliata: il JSON
+        # deve riportare i token generati e l'oro dei primi casi non esatti.
+        from esami.esamina import valuta_dataset
+
+        vocab = carica_vocabolario()
+        oro = grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"})
+        generato = grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "giardino"})
+        modello = _ModelloIniettato(vocab, [*grafo_a_token(generato), "[FINE]"])
+        record = [{
+            "storia": [],
+            "esempi": [
+                {"tipo": "posizione", "domanda": ["(", "trovarsi", "(", "quesito", "dove", ")", ")"],
+                 "risposta": grafo_a_token(oro)}
+                for _ in range(3)
+            ],
+        }]
+        esito = valuta_dataset(modello, vocab, record, ctx=200, device="cpu")
+        assert esito["esattezza"] == 0.0
+        assert len(esito["campioni_non_esatti"]) == 3
+        campione = esito["campioni_non_esatti"][0]
+        assert campione["categoria"] == "errore"
+        assert campione["generato"] == grafo_a_token(generato)
+        assert campione["oro"] == grafo_a_token(oro)
 
 
 @pytest.mark.torch
