@@ -1,0 +1,67 @@
+# Config normativo della Fase 2a (FASE2_PIANO.md). Tutte le scelte
+# numeriche del training e del dataset vivono qui: niente magic number
+# sparsi nel codice.
+
+nome_run: v1
+device: auto  # "auto" | "cpu" | "cuda"
+seed_torch: 1337
+
+percorsi:
+  lessico: lingua/lessico.tsv
+  vocabolario: cervello/vocabolario.json
+  dati_dir: dati
+  risultati_dir: dati/risultati
+
+# -----------------------------------------------------------------------
+# Dataset (esami/genera.py)
+# -----------------------------------------------------------------------
+dataset:
+  ctx: 3072
+  train_storie: 5000
+  dev_storie: 300
+  esame_storie: 300
+  n_per_tipo: 8
+
+# Curriculum a stadi (FASE2_PIANO.md §1.2). Ogni stadio elenca i tipi di
+# domanda ammessi e la soglia di esattezza per passare il cancello. Gli
+# stadi 4-5 sono rimandati (decisione 12): non compaiono qui finché non
+# si decide di eseguirli.
+stadi:
+  1:
+    tipi: [posizione]
+    soglia: 0.95
+    storie_corte: true  # 3-6 tick invece di _lunghezza_storia
+  2:
+    tipi: [posizione]
+    soglia: 0.95
+    storie_corte: false
+  3:
+    tipi: [possesso, conteggio, transfer, parentela]
+    soglia: 0.90
+    storie_corte: false
+
+# -----------------------------------------------------------------------
+# Modello (cervello/modello.py) — ricetta nanoGPT, nessuna variazione
+# -----------------------------------------------------------------------
+modello:
+  n_layer: 8
+  n_head: 8
+  d_model: 256
+  d_ff: 1024
+  dropout: 0.1
+
+# -----------------------------------------------------------------------
+# Training (cervello/addestra.py)
+# -----------------------------------------------------------------------
+training:
+  batch: 4
+  accumulo: 8
+  lr: 3.0e-4
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  warmup_step: 200
+  grad_clip: 1.0
+  max_step: 20000
+  intervallo_valutazione: 500
+  dev_campione: 200
