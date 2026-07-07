@@ -86,3 +86,120 @@ class TestVocabolario:
 
     def test_sha256_lessico_deterministico(self):
         assert sha256_lessico() == sha256_lessico()
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 2: sequenza (linearizzazione grafo <-> token)
+# ---------------------------------------------------------------------------
+
+import random
+
+from mondo.domande import genera_domande
+from mondo.generatore import _lunghezza_storia
+from mondo.grafo import NON_LO_SO, evento_a_grafo, grafo_fatto
+from mondo.simulatore import genera_storia
+from mondo.tipi import Evento
+from cervello.sequenza import componi_esempio, grafo_a_token, token_a_grafo
+
+
+class TestSequenzaGolden:
+    def test_golden_evento(self):
+        e = Evento(t=9, azione="andare", agente="sara", luogo_origine="cucina", luogo="giardino")
+        g = evento_a_grafo(e)
+        atteso = (
+            "( andare ( nsubj sara ) ( obl:origine cucina ) "
+            "( obl:luogo giardino ) ( obl:tempo nove ) )"
+        ).split()
+        assert grafo_a_token(g) == atteso
+        assert token_a_grafo(atteso, "evento") == g
+
+    def test_golden_domanda_istanza(self):
+        g = grafo_fatto("trovarsi", nsubj="mela_1", quesito="dove")
+        atteso = "( trovarsi ( nsubj mela primo ) ( quesito dove ) )".split()
+        assert grafo_a_token(g) == atteso
+        assert token_a_grafo(atteso, "fatto") == g
+
+    def test_non_lo_so(self):
+        atteso = ["(", "non-lo-so", ")"]
+        assert grafo_a_token(NON_LO_SO) == atteso
+        assert token_a_grafo(atteso, "fatto") == NON_LO_SO
+
+    def test_istanza_qualunque_ordinale_anche_uno(self):
+        g = grafo_fatto("avere", obj="legna_1", quesito="chi")
+        tok = grafo_a_token(g)
+        assert tok == "( avere ( obj legna primo ) ( quesito chi ) )".split()
+        assert token_a_grafo(tok, "fatto") == g
+
+    def test_ordinale_oltre_30_solleva(self):
+        with pytest.raises(ValueError):
+            grafo_a_token(grafo_fatto("avere", obj="mela_31", quesito="chi"))
+
+
+class TestSequenzaMalformata:
+    def test_parentesi_troncata(self):
+        with pytest.raises(ValueError):
+            token_a_grafo(["(", "andare", "(", "nsubj", "sara", ")"], "evento")
+
+    def test_token_in_eccesso(self):
+        with pytest.raises(ValueError):
+            token_a_grafo(["(", "andare", ")", ")"], "evento")
+
+    def test_relazione_ignota(self):
+        with pytest.raises(ValueError):
+            token_a_grafo(["(", "andare", "(", "boh:relazione", "sara", ")", ")"], "evento")
+
+    def test_ordinale_orfano(self):
+        with pytest.raises(ValueError):
+            token_a_grafo(
+                ["(", "andare", "(", "nsubj", "mela", "primo", "extra", ")", ")"], "evento"
+            )
+
+    def test_radice_sconosciuta(self):
+        with pytest.raises(ValueError):
+            token_a_grafo(["(", "nsubj", "sara", ")"], "evento")
+
+    def test_famiglia_sconosciuta(self):
+        with pytest.raises(ValueError):
+            token_a_grafo(["(", "andare", ")"], "boh")
+
+    def test_evento_senza_agente(self):
+        with pytest.raises(ValueError):
+            token_a_grafo(["(", "andare", "(", "obl:tempo", "nove", ")", ")"], "evento")
+
+
+class TestComponiEsempio:
+    def test_struttura(self):
+        storia = [["(", "andare", ")"], ["(", "dormire", ")"]]
+        domanda = ["(", "trovarsi", ")"]
+        risposta = ["(", "non-lo-so", ")"]
+        atteso = (
+            ["[STORIA]"] + storia[0] + storia[1]
+            + ["[DOMANDA]"] + domanda
+            + ["[RISPOSTA]"] + risposta
+            + ["[FINE]"]
+        )
+        assert componi_esempio(storia, domanda, risposta) == atteso
+
+
+class TestRoundTripMassa:
+    def test_round_trip_eventi_e_domande_seed_0_299(self):
+        vocab = carica_vocabolario()
+        for seed in range(300):
+            n_tick = _lunghezza_storia(seed)
+            storia = genera_storia(seed=seed, n_tick=n_tick)
+            grafi = [evento_a_grafo(e) for e in storia.eventi]
+            for g in grafi:
+                tok = grafo_a_token(g)
+                for t in tok:
+                    assert t in vocab, f"seed {seed}: token {t!r} fuori vocabolario"
+                assert token_a_grafo(tok, "evento") == g, f"seed {seed}: round-trip evento fallito"
+
+            rng = random.Random(f"domande-{seed}")
+            for d in genera_domande(storia, rng, n_per_tipo=8):
+                for g in (d.grafo_domanda, d.grafo_risposta):
+                    tok = grafo_a_token(g)
+                    for t in tok:
+                        assert t in vocab, f"seed {seed} {d.tipo}: token {t!r} fuori vocabolario"
+                    assert token_a_grafo(tok, "fatto") == g, (
+                        f"seed {seed} {d.tipo}: round-trip fatto fallito"
+                    )
