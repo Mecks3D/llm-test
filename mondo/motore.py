@@ -99,8 +99,10 @@ _PESO_PER_AZIONE = {
     "cercare": 0.08,
     "guardare": 0.25,
     "dire": 0.4,
-    "dormire": 0.5,  # il pisolino volontario resta possibile ma raro: la
-                     # maggior parte dei sonni deve avere causa determinata
+    "dormire": 0.1,  # il pisolino volontario resta possibile ma raro (verificato
+                     # empiricamente: ~1 sonno volontario ogni 10 forzati su
+                     # 2000 semi): la maggior parte dei sonni deve avere causa
+                     # determinata (soglia di esaustione)
     "dare": 6.0,
     "aprire": 6.0,
     "chiudere": 6.0,

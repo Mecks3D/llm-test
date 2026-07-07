@@ -72,6 +72,12 @@ class TestLessico:
         with pytest.raises(ValueError):
             lessico.valida()
 
+    def test_tratto_richiesto_da_stampi_mancante_solleva_errore_leggibile(self):
+        lessico = carica_lessico()
+        del lessico["essere"].tratti["ausiliare_f_sing"]
+        with pytest.raises(ValueError, match="ausiliare_f_sing"):
+            lessico.valida()
+
 
 # ---------------------------------------------------------------------------
 # Gruppo 2: morfologia

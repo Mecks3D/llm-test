@@ -5,6 +5,11 @@
 # L'ORDINE DELLE RIGHE E' PARTE DEL CONTRATTO: le prime 65 righe sono i
 # primitivi NSM nell'ordine normativo (FASE1_PIANO.md §7.1); non riordinarle.
 #
+# VINCOLI PERMANENTI SUI TRATTI (richiesti da lingua/stampi.py all'import,
+# vedi lessico.TRATTI_RICHIESTI_DA_STAMPI, controllati da Lessico.valida()):
+#   essere:  ausiliare_f_sing, ausiliare_f_plur
+#   nessuno: apocope_m, femminile
+#
 # --- 65 primitivi NSM (indici 0-64) ---
 io	PRIM	pos=PRON	-
 tu	PRIM	pos=PRON	-

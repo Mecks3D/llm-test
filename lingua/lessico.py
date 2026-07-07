@@ -51,6 +51,18 @@ LEMMI_DOMANDE: tuple[str, ...] = (
     "trovarsi", "essere", "esserci",
 )
 
+# Tratti specifici che lingua/stampi.py legge direttamente all'avvio (import
+# time), oltre ai lemmi già richiesti sopra. Non derivano da nessuna categoria
+# esistente (azioni, persone, luoghi...): vanno controllati a parte, altrimenti
+# una rinomina in lessico.tsv passerebbe valida() e si romperebbe solo al primo
+# import di stampi.py con un KeyError.
+TRATTI_RICHIESTI_DA_STAMPI: tuple[tuple[str, str], ...] = (
+    ("essere", "ausiliare_f_sing"),
+    ("essere", "ausiliare_f_plur"),
+    ("nessuno", "apocope_m"),
+    ("nessuno", "femminile"),
+)
+
 
 @dataclass(frozen=True)
 class VoceLessico:
@@ -143,6 +155,12 @@ class Lessico:
         for lemma in LEMMI_DOMANDE:
             if lemma not in self:
                 raise ValueError(f"lemma di domande/risposte mancante nel lessico: {lemma!r}")
+
+        for lemma, tratto in TRATTI_RICHIESTI_DA_STAMPI:
+            if lemma not in self:
+                raise ValueError(f"lemma mancante nel lessico: {lemma!r} (richiesto per il tratto {tratto!r} usato da lingua/stampi.py)")
+            if tratto not in self[lemma].tratti:
+                raise ValueError(f"tratto mancante nel lessico: lemma {lemma!r} tratto {tratto!r} (richiesto da lingua/stampi.py)")
 
 
 def _analizza_tratti(campo: str) -> dict[str, str]:
