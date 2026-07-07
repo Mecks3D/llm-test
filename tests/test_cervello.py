@@ -5,6 +5,7 @@ import pytest
 
 try:
     import torch
+    import torch.nn.functional as F
 except ImportError:
     torch = None  # i test @pytest.mark.torch vengono saltati da tests/conftest.py
 
@@ -373,3 +374,114 @@ class TestModello:
             assert torch.equal(logits1, logits2)
         finally:
             torch.use_deterministic_algorithms(False)
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 6: canary di apprendimento — cancello duro (FASE2_PIANO.md §9.6)
+#
+# Marcato "slow": escluso dalla suite di default (pytest.ini: -m "not slow")
+# perché su CPU è impraticabile (misurato: >30s/step con batch=32, ctx~360).
+# Va eseguito esplicitamente, tipicamente su GPU (Colab: vedi
+# colab_training.ipynb, cella dedicata al canary).
+# ---------------------------------------------------------------------------
+
+def _decodifica_greedy_canario(modello, vocab, id_fine, ids_prefisso, max_nuovi, device):
+    modello.eval()
+    ids = list(ids_prefisso)
+    with torch.no_grad():
+        for _ in range(max_nuovi):
+            x = torch.tensor([ids], dtype=torch.long, device=device)
+            logits = modello(x)
+            prossimo = int(torch.argmax(logits[0, -1]).item())
+            ids.append(prossimo)
+            if prossimo == id_fine:
+                break
+    modello.train()
+    return ids[len(ids_prefisso):]
+
+
+@pytest.mark.torch
+@pytest.mark.slow
+class TestCanarioApprendimento:
+    def test_overfit_32_esempi_stadio1(self):
+        from esami.genera import carica_config, genera_dataset
+        from cervello.dati import componi_esempio, impacchetta_batch
+        from cervello.modello import ConfigModello, Modello
+
+        vocab = carica_vocabolario()
+        config = carica_config()
+        config = {**config, "dataset": {**config["dataset"], "train_storie": 40}}
+        record = genera_dataset(1, "train", config)
+
+        esempi: list[list[str]] = []
+        for r in record:
+            for e in r["esempi"]:
+                esempi.append(componi_esempio([r["storia"]], e["domanda"], e["risposta"]))
+        esempi.sort(key=len)
+        esempi = esempi[:32]
+        assert len(esempi) == 32
+
+        idx_risposta = [e.index("[RISPOSTA]") for e in esempi]
+        idx_fine = [e.index("[FINE]") for e in esempi]
+        # il grafo-verità è la sotto-sequenza tra [RISPOSTA] e [FINE] (esclusi):
+        # è esattamente l'output di grafo_a_token(grafo_risposta).
+        risposte_oro = [
+            token_a_grafo(e[ir + 1 : ifi], "fatto")
+            for e, ir, ifi in zip(esempi, idx_risposta, idx_fine)
+        ]
+
+        device = "cuda" if torch.cuda.is_available() else "cpu"
+        cfg = ConfigModello(vocab_size=vocab.dimensione, ctx=3072, dropout=0.0)
+        torch.manual_seed(0)
+        modello = Modello(cfg).to(device)
+        ottim = torch.optim.AdamW(modello.parameters(), lr=1e-3, betas=(0.9, 0.95))
+
+        batch = impacchetta_batch(esempi, vocab)
+        input_ids = batch.input.to(device)
+        bersaglio = batch.bersaglio.to(device)
+        maschera = batch.maschera.to(device).float()
+
+        id_fine = vocab.id("[FINE]")
+        max_step = 1000
+        esatti = 0
+        step_raggiunto = 0
+        for step in range(max_step):
+            step_raggiunto = step + 1
+            modello.train()
+            logits = modello(input_ids)
+            loss_tok = F.cross_entropy(
+                logits.reshape(-1, vocab.dimensione), bersaglio.reshape(-1), reduction="none"
+            )
+            loss = (loss_tok * maschera.reshape(-1)).sum() / maschera.sum()
+            ottim.zero_grad()
+            loss.backward()
+            torch.nn.utils.clip_grad_norm_(modello.parameters(), 1.0)
+            ottim.step()
+
+            if step_raggiunto % 20 != 0 and step_raggiunto != max_step:
+                continue
+
+            esatti = 0
+            for e, idx, ifi, oro in zip(esempi, idx_risposta, idx_fine, risposte_oro):
+                prefisso = [vocab.id(t) for t in e[: idx + 1]]
+                max_nuovi = (ifi - idx) + 5
+                generati = _decodifica_greedy_canario(
+                    modello, vocab, id_fine, prefisso, max_nuovi, device
+                )
+                token_generati = [vocab.token(i) for i in generati]
+                if token_generati and token_generati[-1] == "[FINE]":
+                    token_generati = token_generati[:-1]
+                try:
+                    grafo_generato = token_a_grafo(token_generati, "fatto")
+                except ValueError:
+                    continue
+                if grafo_generato == oro:
+                    esatti += 1
+            if esatti == len(esempi):
+                break
+
+        assert esatti == len(esempi), (
+            f"canary non converge: {esatti}/{len(esempi)} esatti dopo {step_raggiunto} step "
+            "su 1000 (qualcosa è scollegato nella pipeline dati->modello->loss: NON procedere "
+            "alle tappe successive finché questo non passa)"
+        )
