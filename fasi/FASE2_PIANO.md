@@ -74,7 +74,23 @@ che la v1 float supera gli esami degli stadi 1–3.
   (sottostimano il training puro); la decodifica greedy è senza KV cache e
   un esempio alla volta — costo di valutazione da mettere nel conto della
   stima di durata (decisione 10).
-- Non ancora fatto: T7 (run vero, stadi 1–3).
+- **Fumo lungo eseguito (2026-07-08): pipeline CERTIFICATA.** 3000 step su
+  1000 storie, ~25 min su GPU: esattezza staccata dallo zero (0→6% dev,
+  5,75% su 800 esempi d'esame), malformate 0/800 (grammatica del grafo
+  imparata al 100%), errori residui = contenuto sbagliato in grafo ben
+  formato; invenzioni 166/800 ≈ la quota di non-lo-so nei dati (il modello
+  non si astiene ancora). Plateau a ~4-6% attribuito a LR già decaduto
+  (cosine su max_step=3000) e dati 1/5 della produzione — non a un bug.
+  Token/s stabili ~36,8k. **Stima durata (decisione 10)**: stadio 1 di
+  produzione ~2,5-3h nel caso peggiore (meno con early stop); stadi 2-3
+  (sequenze ~4×) fino a ~9h ciascuno al tetto; curriculum intero ~20h.
+  Percorso scelto per Colab: run PER-STADIO (sezione 7 del notebook =
+  stadio 1 di produzione; sezione 8 = comando unico di riferimento).
+  Aperto: checkpoint intra-stadio se gli stadi 2-3 confermano durate
+  multi-ora (oggi si salva solo a fine stadio).
+- Non ancora fatto: T7 (run vero, stadi 1–3). Prossimo passo: ok esplicito
+  di Andrea al run dello stadio 1 (~3h) e lancio della sezione 7 del
+  notebook.
 
 ---
 
