@@ -485,3 +485,67 @@ class TestCanarioApprendimento:
             "su 1000 (qualcosa è scollegato nella pipeline dati->modello->loss: NON procedere "
             "alle tappe successive finché questo non passa)"
         )
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 7 (parte addestra): ripresa con --stadio N dal checkpoint N-1
+# ---------------------------------------------------------------------------
+
+@pytest.mark.torch
+class TestRipresaDaCheckpoint:
+    """Con --stadio N (N non minimo) il training riparte dal checkpoint
+    dello stadio N-1, mai da pesi casuali (FASE2_PIANO.md §7)."""
+
+    def _config(self, tmp_path):
+        return {
+            "nome_run": "run_test",
+            "device": "cpu",
+            "seed_torch": 0,
+            "percorsi": {
+                "dati_dir": str(tmp_path / "dati"),
+                "risultati_dir": str(tmp_path / "risultati"),
+            },
+            "dataset": {"ctx": 64, "train_storie": 1, "dev_storie": 1,
+                        "esame_storie": 1, "n_per_tipo": 1},
+            "stadi": {
+                1: {"tipi": ["posizione"], "soglia": 0.95, "storie_corte": True},
+                2: {"tipi": ["posizione"], "soglia": 0.95, "storie_corte": False},
+            },
+            "modello": {"n_layer": 1, "n_head": 2, "d_model": 8, "d_ff": 16,
+                        "dropout": 0.0},
+            "training": {"batch": 1, "accumulo": 1, "lr": 3.0e-4, "beta1": 0.9,
+                         "beta2": 0.95, "weight_decay": 0.1, "warmup_step": 1,
+                         "grad_clip": 1.0, "max_step": 1,
+                         "intervallo_valutazione": 1, "dev_campione": 1},
+        }
+
+    def _percorso_config(self, tmp_path, config):
+        import yaml
+        percorso = tmp_path / "config.yaml"
+        percorso.write_text(yaml.safe_dump(config), encoding="utf-8")
+        return percorso
+
+    def test_stadio_2_senza_checkpoint_stadio_1_solleva(self, tmp_path):
+        from cervello.addestra import esegui_curriculum
+        config = self._config(tmp_path)
+        percorso_config = self._percorso_config(tmp_path, config)
+        with pytest.raises(FileNotFoundError, match="stadio 1"):
+            esegui_curriculum(config, percorso_config, solo_stadio=2)
+
+    def test_stadio_2_con_checkpoint_lo_carica_e_prosegue(self, tmp_path):
+        from cervello.addestra import esegui_curriculum
+        from cervello.modello import ConfigModello, Modello
+        config = self._config(tmp_path)
+        percorso_config = self._percorso_config(tmp_path, config)
+
+        vocab = carica_vocabolario()
+        cfg = ConfigModello(vocab_size=vocab.dimensione, ctx=64, **config["modello"])
+        torch.manual_seed(0)
+        dir_risultati = tmp_path / "risultati" / "run_test"
+        dir_risultati.mkdir(parents=True)
+        torch.save({"modello": Modello(cfg).state_dict()}, dir_risultati / "stadio1.pt")
+
+        # Il checkpoint viene caricato e si prosegue fino ai dataset (qui
+        # assenti): l'errore atteso riguarda train.jsonl, NON il checkpoint.
+        with pytest.raises(FileNotFoundError, match="train.jsonl"):
+            esegui_curriculum(config, percorso_config, solo_stadio=2)

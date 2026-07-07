@@ -44,9 +44,25 @@ che la v1 float supera gli esami degli stadi 1–3.
   riportare il log (`loss_train`, `esattezza_dev`, `token_al_secondo`) per
   calcolare la stima di durata del curriculum completo — run > 2h non si
   lanciano senza il suo ok esplicito (decisione 10).
-- **Richiesta di Andrea per la prossima conversazione**: una revisione
-  generale del codice scritto in T1–T6 (non solo dei test) prima di
-  proseguire con T7.
+- **Run di fumo eseguito su Colab (2026-07-07)**: pipeline intera OK in ~2
+  minuti (dati → training → checkpoint → esame), loss in discesa
+  (0,96→0,60 train), ~41.000 token/s su GPU. Esattezza 0,0000 a 300 step:
+  atteso per un modello sotto-addestrato (il canary T5 prova che la catena
+  arriva al 100%); da confermare guardando i `conteggi` in
+  `esame_stadio1.json` (dominante `errore` = solo poco training;
+  `malformata` = indagare). NB: i risultati vivono nel filesystem effimero
+  di Colab — la cella 6c ora stampa il JSON e copia tutto su Drive.
+- **Revisione generale T1–T6 fatta (2026-07-07)**: codice conforme alle
+  decisioni vincolanti. Tre correzioni applicate a `cervello/addestra.py`:
+  (1) loss dev calcolata a micro-batch sotto `no_grad` (un batch unico da
+  `dev_campione`×ctx andava in OOM su GPU nel run vero); (2) `--stadio N`
+  ora riparte dal checkpoint dello stadio N−1 (prima ripartiva da pesi
+  casuali; errore chiaro se il checkpoint manca); (3) aggiunto
+  `torch.use_deterministic_algorithms(True, warn_only=True)`. Note non
+  bloccanti: i token/s nel log includono il tempo di valutazione
+  (sottostimano il training puro); la decodifica greedy è senza KV cache e
+  un esempio alla volta — costo di valutazione da mettere nel conto della
+  stima di durata (decisione 10).
 - Non ancora fatto: T7 (run vero, stadi 1–3).
 
 ---

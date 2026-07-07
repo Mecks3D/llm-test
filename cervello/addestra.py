@@ -111,7 +111,17 @@ def _valuta_dev(
         componi_esempio([c["storia"]], c["esempi"][0]["domanda"], c["esempi"][0]["risposta"])
         for c in campione
     ]
-    loss_dev = calcola_loss(modello, impacchetta_batch(composti, vocab), device).item()
+    # Micro-batch della stessa taglia del training: un batch unico da
+    # dev_campione sequenze lunghe fino a ctx non sta in memoria su GPU.
+    batch_size = config["training"]["batch"]
+    somma_loss, n_token = 0.0, 0
+    with torch.no_grad():
+        for i in range(0, len(composti), batch_size):
+            batch = impacchetta_batch(composti[i : i + batch_size], vocab)
+            token_batch = int(batch.maschera.sum().item())
+            somma_loss += calcola_loss(modello, batch, device).item() * token_batch
+            n_token += token_batch
+    loss_dev = somma_loss / max(n_token, 1)
     esiti = valuta_dataset(modello, vocab, campione, config["dataset"]["ctx"], device)
     return {"loss_dev": loss_dev, "esattezza_dev": esiti["esattezza"]}
 
@@ -199,6 +209,10 @@ def esegui_curriculum(config: dict, percorso_config: Path, solo_stadio: int | No
     vocab = carica_vocabolario()
     device = dispositivo(config)
     torch.manual_seed(config["seed_torch"])
+    # Determinismo (FASE2_PIANO.md §2): su CPU il run è riproducibile byte
+    # per byte; su GPU le operazioni senza variante deterministica emettono
+    # un warning (warn_only) — sono le fonti residue da documentare nel log.
+    torch.use_deterministic_algorithms(True, warn_only=True)
 
     nome_run = config["nome_run"]
     dir_risultati = PROJECT_ROOT / config["percorsi"]["risultati_dir"] / nome_run
@@ -208,6 +222,23 @@ def esegui_curriculum(config: dict, percorso_config: Path, solo_stadio: int | No
 
     cfg_modello = ConfigModello(vocab_size=vocab.dimensione, ctx=config["dataset"]["ctx"], **config["modello"])
     modello = Modello(cfg_modello).to(device)
+
+    # Con --stadio N (N non minimo) si riprende dal checkpoint dello stadio
+    # precedente: il training dello stadio N parte SEMPRE dai pesi di N-1,
+    # mai da pesi casuali (FASE2_PIANO.md §7).
+    if solo_stadio is not None and solo_stadio > min(config["stadi"]):
+        stadio_prec = max(s for s in config["stadi"] if s < solo_stadio)
+        percorso_prec = dir_risultati / f"stadio{stadio_prec}.pt"
+        if not percorso_prec.exists():
+            raise FileNotFoundError(
+                f"per riprendere dallo stadio {solo_stadio} serve il checkpoint "
+                f"dello stadio {stadio_prec}: {percorso_prec} non esiste "
+                f"(eseguire prima lo stadio {stadio_prec} o il curriculum completo)"
+            )
+        stato = torch.load(percorso_prec, map_location=device)
+        modello.load_state_dict(stato["modello"])
+        print(f"ripresa dallo stadio {stadio_prec}: caricato {percorso_prec}")
+
     print(f"modello: {modello.numero_parametri()} parametri, device={device}")
     ottimizzatore = crea_ottimizzatore(modello, config)
 
