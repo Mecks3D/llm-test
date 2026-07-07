@@ -3,30 +3,39 @@
 **Obiettivo**: una rete ~10M parametri che legge storie come grafi
 linearizzati e risponde alle domande del curriculum. Prima in float
 (2a), poi ternaria (2b). Dipendenze: PyTorch. Modulo: `cervello/`.
+Piano esecutivo: `fasi/FASE2_PIANO.md` (specializza questo documento).
 
 ## Linearizzazione dei grafi — `cervello/sequenza.py`
 
-Il grafo diventa una sequenza di token con visita in profondità:
+Il grafo diventa una sequenza di token con visita in profondità
+(schema reale dei grafi di `mondo/grafo.py`: i nodi portano solo
+lemma e pos, niente tratti morfologici; le istanze di risorsa
+`mela_2` si scompongono in lemma + ordinale):
 
 ```
-[STORIA] ( mangiare passato ( sogg bambino plur ) ( ogg mela plur ) ) ...
-[DOMANDA] ( trovarsi presente ( sogg mela ) ( luogo [MASK] ) )
-[RISPOSTA] cucina [FINE]
+[STORIA] ( andare ( nsubj sara ) ( obl:origine cucina ) ( obl:luogo giardino ) ( obl:tempo nove ) ) ...
+[DOMANDA] ( trovarsi ( nsubj mela primo ) ( quesito dove ) )
+[RISPOSTA] ( essere ( nsubj mela primo ) ( obl:luogo cucina ) ) [FINE]
 ```
 
-- Vocabolario = 65 primitivi (id 0–64) + lemmi del lessico + relazioni UD
-  usate + tratti + token speciali. Ordine stabile, salvato in
+- Vocabolario = 65 primitivi (id 0–64) + token speciali + relazioni UD
+  usate + gli altri lemmi del lessico. Ordine stabile, salvato in
   `cervello/vocabolario.json`, generato DAL lessico (mai a mano).
-- Totale atteso ≈ 2.500–3.500 token. Niente BPE, niente sottoparole:
+- Dimensione: cresce col lessico; col lessico attuale (~300 lemmi)
+  sono ~350 token. Niente BPE, niente sottoparole:
   un lemma = un token. Il tokenizer del progetto è il parser della Fase 1.
+- La risposta è un grafo completo linearizzato (mai un token secco):
+  la valutazione resta grafo vs grafo, e "non lo so" è il grafo `NON_LO_SO`.
 - Round-trip testato: grafo → sequenza → grafo esatto.
 
 ## Modello v1 — `cervello/modello.py`
 
 Decoder-only transformer, ricetta nanoGPT senza variazioni creative:
 
-- n_layer=8, n_head=8, d_model=256, ctx=512, pre-LayerNorm, GELU,
-  dropout 0.1, embedding legati all'output. ≈ 8–10M parametri.
+- n_layer=8, n_head=8, d_model=256, ctx=3072, pre-LayerNorm, GELU,
+  dropout 0.1, embedding legati all'output. ≈ 7–10M parametri.
+  (ctx misurato sui dati reali: le sequenze [STORIA][DOMANDA][RISPOSTA]
+  vanno da ~1.100 a ~2.700 token; 512 non basta mai — corretto 2026-07-07.)
 - Training: cross-entropy next-token su `[STORIA][DOMANDA][RISPOSTA]`,
   con la loss **mascherata sulla sola parte risposta** (la storia è data,
   non va imparata a pappagallo).
@@ -42,7 +51,10 @@ Decoder-only transformer, ricetta nanoGPT senza variazioni creative:
 - **Esattezza = confronto di grafi**, non di stringhe: la risposta generata
   si riconverte in grafo e si confronta con il grafo-verità.
 - Le definizioni dei primitivi ("che cosa significa X?") entrano nel
-  training dello stadio 1 come dati normali.
+  training dello stadio 1 come dati normali. (Rimandato: le definizioni
+  del lessico sono quasi tutte TODO e non hanno ancora una forma-grafo;
+  lo stadio 1 della 2a usa storie corte con domande di posizione —
+  decisione di Andrea 2026-07-07, vedi FASE2_PIANO.md.)
 - Regola assoluta: mai addestrare su seed d'esame. Il generatore rifiuta
   di produrre training set con seed nel range riservato agli esami.
 
