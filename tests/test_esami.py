@@ -149,3 +149,194 @@ class TestCaricaConfig:
         assert config["dataset"]["ctx"] == 3072
         assert config["stadi"][1]["tipi"] == ["posizione"]
         assert config["stadi"][3]["soglia"] == 0.90
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 7: esami/esamina.py — decodifica greedy + confronto grafo vs grafo
+# ---------------------------------------------------------------------------
+
+try:
+    import torch
+except ImportError:
+    torch = None
+
+from cervello.vocabolario import carica_vocabolario
+from cervello.sequenza import grafo_a_token
+from mondo.grafo import NON_LO_SO, grafo_fatto
+
+
+class _ModelloIniettato:
+    """Finto modello per `decodifica_greedy`: ad ogni chiamata restituisce
+    logits il cui argmax riproduce, in ordine, `sequenza_output` (una lista
+    di token già nel vocabolario). Permette di testare esamina.py senza
+    addestrare nulla (FASE2_PIANO.md §9.7: "con risposte iniettate")."""
+
+    def __init__(self, vocab, sequenza_output):
+        self._ids_output = [vocab.id(t) for t in sequenza_output]
+        self._vocab_size = vocab.dimensione
+        self._chiamate = 0
+        self._T_precedente = None
+        self.training = False
+
+    def eval(self):
+        self.training = False
+        return self
+
+    def train(self, mode=True):
+        self.training = mode
+        return self
+
+    def __call__(self, x):
+        B, T = x.shape
+        if self._T_precedente is None or T <= self._T_precedente:
+            self._chiamate = 0  # nuova sessione di decodifica (nuovo esempio)
+        self._T_precedente = T
+        idx = min(self._chiamate, len(self._ids_output) - 1)
+        prossimo_id = self._ids_output[idx]
+        self._chiamate += 1
+        logits = torch.full((B, T, self._vocab_size), -10.0)
+        logits[0, -1, prossimo_id] = 10.0
+        return logits
+
+
+@pytest.mark.torch
+class TestCategoria:
+    def _valuta_con_iniezione(self, oro_grafo, sequenza_generata, tipo="posizione"):
+        from esami.esamina import valuta_esempio
+
+        vocab = carica_vocabolario()
+        modello = _ModelloIniettato(vocab, [*sequenza_generata, "[FINE]"])
+        esempio = {"tipo": tipo, "domanda": ["(", "trovarsi", "(", "quesito", "dove", ")", ")"],
+                   "risposta": grafo_a_token(oro_grafo)}
+        return valuta_esempio(modello, vocab, storia_flat=[], esempio=esempio, ctx=200, device="cpu")
+
+    def test_esatto(self):
+        oro = grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"})
+        esito = self._valuta_con_iniezione(oro, grafo_a_token(oro))
+        assert esito.categoria == "esatto"
+        assert esito.esatto is True
+
+    def test_invenzione(self):
+        # oro = non-lo-so, il modello risponde con un fatto inventato
+        generato = grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"})
+        esito = self._valuta_con_iniezione(NON_LO_SO, grafo_a_token(generato))
+        assert esito.categoria == "invenzione"
+        assert esito.esatto is False
+
+    def test_astensione_errata(self):
+        # oro determinabile, il modello risponde non-lo-so
+        oro = grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"})
+        esito = self._valuta_con_iniezione(oro, grafo_a_token(NON_LO_SO))
+        assert esito.categoria == "astensione_errata"
+        assert esito.esatto is False
+
+    def test_malformata(self):
+        oro = grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"})
+        # sequenza sbilanciata: non ricostruisce un grafo valido
+        esito = self._valuta_con_iniezione(oro, ["(", "essere", "(", "nsubj", "sara"])
+        assert esito.categoria == "malformata"
+        assert esito.esatto is False
+
+    def test_errore_generico(self):
+        # oro determinabile, il modello risponde con un fatto diverso ma valido
+        oro = grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"})
+        generato = grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "giardino"})
+        esito = self._valuta_con_iniezione(oro, grafo_a_token(generato))
+        assert esito.categoria == "errore"
+        assert esito.esatto is False
+
+
+@pytest.mark.torch
+class TestValutaDataset:
+    def test_conteggi_e_esattezza(self):
+        from esami.esamina import valuta_dataset
+
+        vocab = carica_vocabolario()
+        oro_esatto = grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"})
+        oro_determinabile = grafo_fatto("essere", nsubj="piero", **{"obl:luogo": "orto"})
+        generato_sbagliato = grafo_fatto("essere", nsubj="piero", **{"obl:luogo": "cucina"})
+
+        def _record(tipo, oro, sequenza_generata):
+            return {
+                "storia": [],
+                "esempi": [{
+                    "tipo": tipo,
+                    "domanda": ["(", "trovarsi", "(", "quesito", "dove", ")", ")"],
+                    "risposta": grafo_a_token(oro),
+                }],
+            }, [*sequenza_generata, "[FINE]"]
+
+        # 4 esempi: 1 esatto, 1 invenzione, 1 astensione_errata, 1 errore
+        casi = [
+            _record("posizione", oro_esatto, grafo_a_token(oro_esatto)),
+            _record("posizione", NON_LO_SO, grafo_a_token(oro_esatto)),
+            _record("possesso", oro_determinabile, grafo_a_token(NON_LO_SO)),
+            _record("possesso", oro_determinabile, grafo_a_token(generato_sbagliato)),
+        ]
+
+        # ogni caso ha una risposta iniettata diversa: serve uno stub per
+        # caso. L'aggregazione multi-esempio con un unico modello è testata
+        # a parte in test_valuta_dataset_stesso_modello_su_piu_esempi_identici.
+        from esami.esamina import valuta_esempio
+
+        totali = {"esatto": 0, "invenzione": 0, "astensione_errata": 0, "malformata": 0, "errore": 0}
+        per_tipo = {}
+        for record, sequenza in casi:
+            modello = _ModelloIniettato(vocab, sequenza)
+            esempio = record["esempi"][0]
+            esito = valuta_esempio(modello, vocab, record["storia"], esempio, ctx=200, device="cpu")
+            totali[esito.categoria] += 1
+            per_tipo.setdefault(esito.tipo, {"esatto": 0, "n": 0})
+            per_tipo[esito.tipo]["n"] += 1
+            if esito.esatto:
+                per_tipo[esito.tipo]["esatto"] += 1
+
+        assert totali == {"esatto": 1, "invenzione": 1, "astensione_errata": 1, "malformata": 0, "errore": 1}
+        assert per_tipo["posizione"] == {"esatto": 1, "n": 2}
+        assert per_tipo["possesso"] == {"esatto": 0, "n": 2}
+
+    def test_valuta_dataset_stesso_modello_su_piu_esempi_identici(self):
+        # con un unico modello iniettato che risponde sempre correttamente
+        # allo stesso identico esempio ripetuto, valuta_dataset deve dare
+        # esattezza 1.0 (verifica l'aggregazione reale, non solo per-esempio).
+        from esami.esamina import valuta_dataset
+
+        vocab = carica_vocabolario()
+        oro = grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"})
+        modello = _ModelloIniettato(vocab, [*grafo_a_token(oro), "[FINE]"])
+        record = [{
+            "storia": [],
+            "esempi": [
+                {"tipo": "posizione", "domanda": ["(", "trovarsi", "(", "quesito", "dove", ")", ")"],
+                 "risposta": grafo_a_token(oro)}
+                for _ in range(3)
+            ],
+        }]
+        esito = valuta_dataset(modello, vocab, record, ctx=200, device="cpu")
+        assert esito["n_esempi"] == 3
+        assert esito["esattezza"] == 1.0
+        assert esito["conteggi"]["esatto"] == 3
+        assert esito["conteggi"]["malformata"] == 0
+
+
+@pytest.mark.torch
+class TestDecodificaGreedy:
+    def test_si_ferma_a_fine(self):
+        from esami.esamina import decodifica_greedy
+
+        vocab = carica_vocabolario()
+        modello = _ModelloIniettato(vocab, ["(", "non-lo-so", ")", "[FINE]"])
+        prefisso = [vocab.id(t) for t in ["[STORIA]", "[DOMANDA]", "[RISPOSTA]"]]
+        generati = decodifica_greedy(modello, vocab, prefisso, ctx=200, device="cpu")
+        token_generati = [vocab.token(i) for i in generati]
+        assert token_generati == ["(", "non-lo-so", ")", "[FINE]"]
+
+    def test_si_ferma_al_tetto_ctx(self):
+        from esami.esamina import decodifica_greedy
+
+        vocab = carica_vocabolario()
+        # sequenza che non emette mai [FINE]
+        modello = _ModelloIniettato(vocab, ["(", "non-lo-so"] * 50)
+        prefisso = [vocab.id(t) for t in ["[STORIA]", "[DOMANDA]", "[RISPOSTA]"]]
+        generati = decodifica_greedy(modello, vocab, prefisso, ctx=10, device="cpu")
+        assert len(prefisso) + len(generati) == 10
