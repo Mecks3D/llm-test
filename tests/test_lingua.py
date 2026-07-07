@@ -327,12 +327,12 @@ CASI_DOMANDE_RISPOSTE = [
     (grafo_fatto("avere", obj="secchio", quesito="chi"), "Chi ha il secchio?"),
     (grafo_fatto("avere", nsubj="nessuno", obj="secchio"), "Nessuno ha il secchio."),
     (grafo_fatto("portare", nsubj="sara", quesito="quanti"), "Quanti oggetti porta Sara?"),
-    (grafo_fatto("portare", nsubj="sara", **{"obl:quantita": "1"}), "Sara porta un oggetto."),
-    (grafo_fatto("portare", nsubj="sara", **{"obl:quantita": "0"}), "Sara non porta nessun oggetto."),
+    (grafo_fatto("portare", nsubj="sara", **{"obl:quantita": "uno"}), "Sara porta un oggetto."),
+    (grafo_fatto("portare", nsubj="sara", **{"obl:quantita": "zero"}), "Sara non porta nessun oggetto."),
     (grafo_fatto("esserci", **{"obl:luogo": "cestino", "quesito": "quanti"}), "Quanti oggetti ci sono nel cestino?"),
-    (grafo_fatto("esserci", **{"obl:luogo": "cestino", "obl:quantita": "1"}), "Nel cestino c'è un oggetto."),
+    (grafo_fatto("esserci", **{"obl:luogo": "cestino", "obl:quantita": "uno"}), "Nel cestino c'è un oggetto."),
     (grafo_fatto("esserci", **{"obl:luogo": "cucina", "quesito": "quanti"}), "Quanti oggetti ci sono in cucina?"),
-    (grafo_fatto("esserci", **{"obl:luogo": "cucina", "obl:quantita": "3"}), "In cucina ci sono tre oggetti."),
+    (grafo_fatto("esserci", **{"obl:luogo": "cucina", "obl:quantita": "tre"}), "In cucina ci sono tre oggetti."),
     (grafo_fatto("dare", obj="mela_2", iobj="sara", quesito="chi"), "Chi ha dato la seconda mela a Sara?"),
     (grafo_fatto("dare", nsubj="piero", obj="mela_2", iobj="sara"), "Piero ha dato la seconda mela a Sara."),
     (grafo_fatto("essere", nsubj="anna", **{"nmod:relativo": "maria", "quesito": "che-parente"}),
@@ -350,9 +350,9 @@ CASI_DOMANDE_RISPOSTE = [
     (grafo_fatto("dormire", nsubj="luca", quesito="perche"), "Perché Luca dorme?"),
     (grafo_fatto("dormire", nsubj="luca", **{"advcl:causa": "stanchezza"}), "Luca dorme perché è stanco."),
     (grafo_fatto("raccogliere", obj="mela", quesito="quante"), "Quante mele sono state raccolte?"),
-    (grafo_fatto("raccogliere", obj="mela", **{"obl:quantita": "2"}), "Sono state raccolte due mele."),
+    (grafo_fatto("raccogliere", obj="mela", **{"obl:quantita": "due"}), "Sono state raccolte due mele."),
     (grafo_fatto("raccogliere", obj="acqua", quesito="quante"), "Quante volte è stata raccolta l'acqua?"),
-    (grafo_fatto("raccogliere", obj="acqua", **{"obl:quantita": "1"}), "L'acqua è stata raccolta una volta."),
+    (grafo_fatto("raccogliere", obj="acqua", **{"obl:quantita": "uno"}), "L'acqua è stata raccolta una volta."),
 ]
 
 

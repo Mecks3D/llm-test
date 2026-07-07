@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from mondo import dati_mondo as dm
 from mondo.grafo import NON_LO_SO, Grafo, grafo_fatto
+from mondo.numeri import lemma_numero
 from mondo.tipi import Evento
 
 from . import morfologia as mf
@@ -34,6 +35,15 @@ _NESSUNA: str = _LESSICO["nessuno"].tratti["femminile"]
 
 def _genere(lemma_o_persona: str) -> str:
     return _LESSICO[lemma_o_persona].tratti["genere"]
+
+
+def valore_numero(lemma: str) -> int:
+    """Inverso di `mondo.numeri.lemma_numero`: dal lemma di un nodo NUM del
+    grafo (tempo o quantità, es. "diciassette") torna al valore intero (17)."""
+    voce = _LESSICO.get(lemma)
+    if voce is None or "valore" not in voce.tratti:
+        raise ValueError(f"lemma numerico sconosciuto nel grafo: {lemma!r}")
+    return int(voce.tratti["valore"])
 
 
 def _capitalizza(s: str) -> str:
@@ -668,7 +678,7 @@ def rendi_risposta(grafo: Grafo, contesto: StatoDiscorso) -> str:
         p, o = rel["nsubj"], rel["obj"]
         testo = f"{sn(p, contesto)} ha {sn(o, contesto)}."
     elif radice == "portare":
-        p, n = rel["nsubj"], int(rel["obl:quantita"])
+        p, n = rel["nsubj"], valore_numero(rel["obl:quantita"])
         soggetto = sn(p, contesto)
         if n == 0:
             testo = f"{soggetto} non porta {_NESSUN} oggetto."
@@ -677,7 +687,7 @@ def rendi_risposta(grafo: Grafo, contesto: StatoDiscorso) -> str:
         else:
             testo = f"{soggetto} porta {mf.numero_in_lettere(n)} oggetti."
     elif radice == "esserci":
-        b, n = rel["obl:luogo"], int(rel["obl:quantita"])
+        b, n = rel["obl:luogo"], valore_numero(rel["obl:quantita"])
         testo_b = _testo_luogo_o_contenitore(b)
         if n == 0:
             testo = f"{testo_b} non c'è {_NESSUN} oggetto."
@@ -692,7 +702,7 @@ def rendi_risposta(grafo: Grafo, contesto: StatoDiscorso) -> str:
         p = rel["nsubj"]
         testo = f"{sn(p, contesto)} {mf.forma_verbale('dormire', 'pres3s')} perché è {mf.aggettivo('stanco', _genere(p))}."
     elif radice == "raccogliere":
-        testo = _rendi_raccolta_risposta(rel["obj"], int(rel["obl:quantita"]))
+        testo = _rendi_raccolta_risposta(rel["obj"], valore_numero(rel["obl:quantita"]))
     else:
         raise ValueError(f"nessuno stampo di risposta per radice={radice!r}")
     return _capitalizza(testo)
@@ -774,23 +784,23 @@ def analizza_domanda(frase: str, contesto: StatoDiscorso) -> Grafo:
 
 def _prova_risposta_raccolta(corpo: str, contesto: StatoDiscorso) -> Grafo | None:
     if corpo == f"Non è {_STATA} raccolta {_NESSUNA} mela":
-        return grafo_fatto("raccogliere", obj="mela", **{"obl:quantita": "0"})
+        return grafo_fatto("raccogliere", obj="mela", **{"obl:quantita": lemma_numero(0)})
     if corpo == f"È {_STATA} raccolta una mela":
-        return grafo_fatto("raccogliere", obj="mela", **{"obl:quantita": "1"})
+        return grafo_fatto("raccogliere", obj="mela", **{"obl:quantita": lemma_numero(1)})
     pref, suff = f"Sono {_STATE} raccolte ", " mele"
     if corpo.startswith(pref) and corpo.endswith(suff):
         n = mf.numero_da_lettere(corpo[len(pref):-len(suff)])
-        return grafo_fatto("raccogliere", obj="mela", **{"obl:quantita": str(n)})
+        return grafo_fatto("raccogliere", obj="mela", **{"obl:quantita": lemma_numero(n)})
     for lemma_u in ("acqua", "legna"):
         soggetto = _capitalizza(_rendi_nome_massa(lemma_u))
         if corpo == f"{soggetto} non è mai {_STATA} raccolta":
-            return grafo_fatto("raccogliere", obj=lemma_u, **{"obl:quantita": "0"})
+            return grafo_fatto("raccogliere", obj=lemma_u, **{"obl:quantita": lemma_numero(0)})
         if corpo == f"{soggetto} è {_STATA} raccolta una volta":
-            return grafo_fatto("raccogliere", obj=lemma_u, **{"obl:quantita": "1"})
+            return grafo_fatto("raccogliere", obj=lemma_u, **{"obl:quantita": lemma_numero(1)})
         pref2, suff2 = f"{soggetto} è {_STATA} raccolta ", " volte"
         if corpo.startswith(pref2) and corpo.endswith(suff2):
             n = mf.numero_da_lettere(corpo[len(pref2):-len(suff2)])
-            return grafo_fatto("raccogliere", obj=lemma_u, **{"obl:quantita": str(n)})
+            return grafo_fatto("raccogliere", obj=lemma_u, **{"obl:quantita": lemma_numero(n)})
     return None
 
 
@@ -861,10 +871,10 @@ def _prova_risposta_conteggio_persona(corpo: str, contesto: StatoDiscorso) -> Gr
     suffisso_zero = f" non porta {_NESSUN} oggetto"
     if corpo.endswith(suffisso_zero):
         p_id = sn_inversa(corpo[:-len(suffisso_zero)], contesto)
-        return grafo_fatto("portare", nsubj=p_id, **{"obl:quantita": "0"})
+        return grafo_fatto("portare", nsubj=p_id, **{"obl:quantita": lemma_numero(0)})
     if corpo.endswith(" porta un oggetto"):
         p_id = sn_inversa(corpo[:-len(" porta un oggetto")], contesto)
-        return grafo_fatto("portare", nsubj=p_id, **{"obl:quantita": "1"})
+        return grafo_fatto("portare", nsubj=p_id, **{"obl:quantita": lemma_numero(1)})
     idx = corpo.find(" porta ")
     if idx != -1 and corpo.endswith(" oggetti"):
         n_testo = corpo[idx + len(" porta "):-len(" oggetti")]
@@ -873,7 +883,7 @@ def _prova_risposta_conteggio_persona(corpo: str, contesto: StatoDiscorso) -> Gr
         except ValueError:
             return None
         p_id = sn_inversa(corpo[:idx], contesto)
-        return grafo_fatto("portare", nsubj=p_id, **{"obl:quantita": str(n)})
+        return grafo_fatto("portare", nsubj=p_id, **{"obl:quantita": lemma_numero(n)})
     return None
 
 
@@ -881,10 +891,10 @@ def _prova_risposta_conteggio_posto(corpo: str, contesto: StatoDiscorso) -> Graf
     suffisso_zero = f" non c'è {_NESSUN} oggetto"
     if corpo.endswith(suffisso_zero):
         b_id = _luogo_o_contenitore_da_testo(_decapitalizza(corpo[:-len(suffisso_zero)]))
-        return grafo_fatto("esserci", **{"obl:luogo": b_id, "obl:quantita": "0"})
+        return grafo_fatto("esserci", **{"obl:luogo": b_id, "obl:quantita": lemma_numero(0)})
     if corpo.endswith(" c'è un oggetto"):
         b_id = _luogo_o_contenitore_da_testo(_decapitalizza(corpo[:-len(" c'è un oggetto")]))
-        return grafo_fatto("esserci", **{"obl:luogo": b_id, "obl:quantita": "1"})
+        return grafo_fatto("esserci", **{"obl:luogo": b_id, "obl:quantita": lemma_numero(1)})
     idx = corpo.find(" ci sono ")
     if idx != -1 and corpo.endswith(" oggetti"):
         n_testo = corpo[idx + len(" ci sono "):-len(" oggetti")]
@@ -893,7 +903,7 @@ def _prova_risposta_conteggio_posto(corpo: str, contesto: StatoDiscorso) -> Graf
         except ValueError:
             return None
         b_id = _luogo_o_contenitore_da_testo(_decapitalizza(corpo[:idx]))
-        return grafo_fatto("esserci", **{"obl:luogo": b_id, "obl:quantita": str(n)})
+        return grafo_fatto("esserci", **{"obl:luogo": b_id, "obl:quantita": lemma_numero(n)})
     return None
 
 

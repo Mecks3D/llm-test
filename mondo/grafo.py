@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from .numeri import lemma_numero
 from .tipi import Evento
 
 
@@ -91,7 +92,7 @@ def evento_a_grafo(evento: Evento) -> Grafo:
         luogo = c.nodo(evento.luogo, "NOUN")
         c.arco(radice, luogo, "obl:luogo")
 
-    tempo = c.nodo(str(evento.t), "NUM")
+    tempo = c.nodo(lemma_numero(evento.t), "NUM")
     c.arco(radice, tempo, "obl:tempo")
 
     return c.costruisci()

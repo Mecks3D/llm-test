@@ -23,7 +23,7 @@ def grafo_a_evento(grafo: Grafo) -> Evento:
     for arco in grafo.archi:
         per_relazione[arco.relazione] = grafo.nodi[arco.dipendente].lemma
     return Evento(
-        t=int(per_relazione["obl:tempo"]),
+        t=stampi.valore_numero(per_relazione["obl:tempo"]),
         azione=radice.lemma,
         agente=per_relazione["nsubj"],
         oggetto=per_relazione.get("obj"),

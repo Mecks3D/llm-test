@@ -30,6 +30,7 @@ from dataclasses import dataclass
 from . import dati_mondo as dm
 from . import parentela
 from .grafo import NON_LO_SO, Grafo, grafo_a_dict, grafo_fatto
+from .numeri import lemma_numero
 from .simulatore import Storia
 
 # Quota di "non lo so" richiesta per tipo (~15-20% indicato da FASE0.md,
@@ -177,7 +178,7 @@ def _genera_conteggio(storia: Storia, rng: random.Random, n: int) -> list[Domand
         if tipo_bersaglio == "persona":
             grafo_domanda = grafo_fatto("portare", nsubj=bid, quesito="quanti")
             quantita = len(stato.oggetti_portati_da(bid))
-            risposta = grafo_fatto("portare", nsubj=bid, **{"obl:quantita": str(quantita)})
+            risposta = grafo_fatto("portare", nsubj=bid, **{"obl:quantita": lemma_numero(quantita)})
         else:
             grafo_domanda = grafo_fatto("esserci", **{"obl:luogo": bid, "quesito": "quanti"})
             if not conoscenza_completa:
@@ -185,7 +186,7 @@ def _genera_conteggio(storia: Storia, rng: random.Random, n: int) -> list[Domand
             else:
                 quantita = (len(stato.oggetti_in_luogo(bid)) if tipo_bersaglio == "luogo"
                             else len(stato.oggetti_dentro(bid)))
-                risposta = grafo_fatto("esserci", **{"obl:luogo": bid, "obl:quantita": str(quantita)})
+                risposta = grafo_fatto("esserci", **{"obl:luogo": bid, "obl:quantita": lemma_numero(quantita)})
         domande.append(Domanda("conteggio", grafo_domanda, risposta))
     return domande
 
@@ -316,7 +317,7 @@ def _genera_causa(storia: Storia, rng: random.Random, n: int) -> list[Domanda]:
         info = dm.RISORSE[fonte]
         grafo_domanda = grafo_fatto("raccogliere", obj=info["lemma_unita"], quesito="quante")
         risposta = grafo_fatto("raccogliere", obj=info["lemma_unita"],
-                               **{"obl:quantita": str(raccolte.get(fonte, 0))})
+                               **{"obl:quantita": lemma_numero(raccolte.get(fonte, 0))})
         domande.append(Domanda("causa", grafo_domanda, risposta))
 
     return domande
