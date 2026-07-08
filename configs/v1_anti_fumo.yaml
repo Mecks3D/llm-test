@@ -1,0 +1,52 @@
+# Fumo dell'esperimento anti-scorciatoia (fasi/FASE2_PIANO_ANTISCORCIATOIA.md
+# §5.1, T5): SOLO stadio 1, dataset e step ridotti per verificare in fretta
+# che selezione anti-scorciatoia + storie troncate + best-dev funzionino
+# prima del run vero (configs/v1_anti.yaml, ~1-1,2h). Non è un config di
+# produzione: non si usa per gli esami del curriculum.
+
+nome_run: v1_anti_fumo
+device: auto
+seed_torch: 1337
+
+percorsi:
+  lessico: lingua/lessico.tsv
+  vocabolario: cervello/vocabolario.json
+  dati_dir: dati/anti_fumo
+  risultati_dir: dati/risultati
+
+dataset:
+  ctx: 3072
+  train_storie: 300
+  dev_storie: 300
+  esame_storie: 300
+  n_per_tipo: 8
+  anti_scorciatoia:
+    quota_difficili: 0.6
+    candidate_per_tipo: 999
+  troncamenti: true
+
+stadi:
+  1:
+    tipi: [posizione]
+    soglia: 0.95
+    storie_corte: true
+
+modello:
+  n_layer: 8
+  n_head: 8
+  d_model: 256
+  d_ff: 1024
+  dropout: 0.1
+
+training:
+  batch: 4
+  accumulo: 8
+  lr: 3.0e-4
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  warmup_step: 50
+  grad_clip: 1.0
+  max_step: 600
+  intervallo_valutazione: 200
+  dev_campione: 200
