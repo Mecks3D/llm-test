@@ -86,8 +86,19 @@ che la v1 float supera gli esami degli stadi 1–3.
   (sequenze ~4×) fino a ~9h ciascuno al tetto; curriculum intero ~20h.
   Percorso scelto per Colab: run PER-STADIO (sezione 7 del notebook =
   stadio 1 di produzione; sezione 8 = comando unico di riferimento).
-  Aperto: checkpoint intra-stadio se gli stadi 2-3 confermano durate
-  multi-ora (oggi si salva solo a fine stadio).
+- **Checkpoint intra-stadio fatto (2026-07-08)**: `cervello/addestra.py`
+  salva a ogni valutazione `stadio<N>_parziale.pt` (scrittura atomica:
+  modello, ottimizzatore, stato RNG, posizione nel curriculum); se il file
+  esiste al lancio, lo stadio riprende da lì (con `--stadio N` il parziale
+  esonera dal checkpoint N−1). Su CPU la ripresa riproduce byte per byte il
+  run ininterrotto (testato: run interrotto+ripreso == run intero); il
+  parziale si cancella a stadio completato. La sezione 7 del notebook ora
+  scrive i risultati direttamente su Drive (symlink `dati/risultati/v1`),
+  così il parziale sopravvive alla morte del runtime: dopo un'interruzione
+  basta rieseguire le celle, il resume è automatico. Costo di ripresa: i
+  batch già consumati dell'epoca in corso vengono rigenerati e scartati
+  (secondi, non minuti). Perdita massima per interruzione: un intervallo di
+  valutazione (500 step).
 - Non ancora fatto: T7 (run vero, stadi 1–3). Prossimo passo: ok esplicito
   di Andrea al run dello stadio 1 (~3h) e lancio della sezione 7 del
   notebook.

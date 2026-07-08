@@ -6,6 +6,12 @@ fermandosi al primo esame fallito (exit code != 0). Il training dello
 stadio N parte dai pesi dello stadio N-1 e usa come train la
 CONCATENAZIONE dei train degli stadi <= N (ripasso: si aggiunge, non si
 sostituisce). Con `--stadio N` esegue solo quello stadio.
+
+Checkpoint intra-stadio: a ogni valutazione si salva (atomicamente)
+`stadio<N>_parziale.pt` con modello, ottimizzatore, stato RNG e posizione
+nel curriculum; se il file esiste al lancio, il training dello stadio N
+riprende da lì invece che da capo (su CPU la ripresa riproduce byte per
+byte il run ininterrotto). Il parziale si cancella a stadio completato.
 """
 from __future__ import annotations
 
@@ -126,21 +132,82 @@ def _valuta_dev(
     return {"loss_dev": loss_dev, "esattezza_dev": esiti["esattezza"]}
 
 
+def _salva_parziale(
+    percorso: Path, modello: Modello, ottimizzatore: torch.optim.Optimizer,
+    stadio: int, step: int, epoca: int, step_inizio_epoca: int,
+    passaggi_consecutivi: int,
+) -> None:
+    """Checkpoint intra-stadio, scritto in modo atomico (file temporaneo +
+    rename): un'interruzione durante la scrittura non corrompe il parziale
+    precedente. Include lo stato RNG di torch così la ripresa consuma la
+    stessa sequenza casuale (dropout) del run ininterrotto."""
+    stato = {
+        "stadio": stadio,
+        "step": step,
+        "epoca": epoca,
+        "step_inizio_epoca": step_inizio_epoca,
+        "passaggi_consecutivi": passaggi_consecutivi,
+        "modello": modello.state_dict(),
+        "ottimizzatore": ottimizzatore.state_dict(),
+        "rng_torch": torch.get_rng_state(),
+        "rng_cuda": torch.cuda.get_rng_state_all() if torch.cuda.is_available() else None,
+    }
+    tmp = percorso.with_suffix(".tmp")
+    torch.save(stato, tmp)
+    tmp.replace(percorso)
+
+
+def carica_parziale(
+    percorso: Path, modello: Modello, ottimizzatore: torch.optim.Optimizer,
+    stadio: int, device: str,
+) -> dict[str, int]:
+    """Carica un checkpoint intra-stadio dentro modello e ottimizzatore e
+    ritorna la posizione di ripresa (step, epoca, step_inizio_epoca,
+    passaggi_consecutivi) da passare ad `addestra_stadio`."""
+    stato = torch.load(percorso, map_location=device)
+    if stato["stadio"] != stadio:
+        raise ValueError(
+            f"il checkpoint parziale {percorso} appartiene allo stadio "
+            f"{stato['stadio']}, non allo stadio {stadio}: rimuoverlo se non serve"
+        )
+    modello.load_state_dict(stato["modello"])
+    ottimizzatore.load_state_dict(stato["ottimizzatore"])
+    torch.set_rng_state(stato["rng_torch"].cpu())
+    if stato.get("rng_cuda") is not None and torch.cuda.is_available():
+        torch.cuda.set_rng_state_all([s.cpu() for s in stato["rng_cuda"]])
+    return {
+        chiave: stato[chiave]
+        for chiave in ("step", "epoca", "step_inizio_epoca", "passaggi_consecutivi")
+    }
+
+
 def addestra_stadio(
     modello: Modello, ottimizzatore: torch.optim.Optimizer, config: dict, stadio: int,
     esempi_train: list[list[str]], dev_record: list[dict], vocab: Vocabolario, device: str,
-    percorso_log: Path, seme: int,
+    percorso_log: Path, seme: int, percorso_parziale: Path | None = None,
+    ripresa: dict[str, int] | None = None,
 ) -> dict[str, Any]:
     """Allena finché l'esattezza dev supera soglia+0.01 per 2 valutazioni
     consecutive, o si raggiunge max_step. Logga ogni `intervallo_valutazione`
-    step (loss train/dev, esattezza dev, token/sec) su `percorso_log`."""
+    step (loss train/dev, esattezza dev, token/sec) su `percorso_log`.
+    Se `percorso_parziale` è dato, a ogni valutazione salva lì il checkpoint
+    intra-stadio; con `ripresa` (da `carica_parziale`) riparte da dentro lo
+    stadio invece che da step 0."""
     t = config["training"]
     soglia = config["stadi"][stadio]["soglia"]
     max_step, intervallo = t["max_step"], t["intervallo_valutazione"]
 
     step = 0
     epoca = 0
+    step_inizio_epoca = 0
+    salta_gruppi = 0
     passaggi_consecutivi = 0
+    if ripresa is not None:
+        step = ripresa["step"]
+        epoca = ripresa["epoca"]
+        step_inizio_epoca = ripresa["step_inizio_epoca"]
+        passaggi_consecutivi = ripresa["passaggi_consecutivi"]
+        salta_gruppi = step - step_inizio_epoca
     token_dal_log = 0
     t_ultimo_log = time.time()
     ultima_valutazione: dict[str, Any] = {"loss_dev": None, "esattezza_dev": 0.0}
@@ -149,6 +216,12 @@ def addestra_stadio(
     while step < max_step:
         rng_epoca = random.Random(f"{seme}-stadio{stadio}-epoca{epoca}")
         for micro_batches in _gruppi_di_accumulo(esempi_train, vocab, t["batch"], t["accumulo"], rng_epoca):
+            # Ripresa: i gruppi già consumati prima dell'interruzione si
+            # scartano DOPO il mescolamento di rng_epoca, così l'ordine dei
+            # batch resta identico a quello del run ininterrotto.
+            if salta_gruppi > 0:
+                salta_gruppi -= 1
+                continue
             step += 1
             _imposta_lr(ottimizzatore, lr_per_step(step, config))
 
@@ -191,9 +264,16 @@ def addestra_stadio(
                 if passaggi_consecutivi >= 2:
                     return {"step_finale": step, **ultima_valutazione}
 
+                if percorso_parziale is not None:
+                    _salva_parziale(
+                        percorso_parziale, modello, ottimizzatore, stadio,
+                        step, epoca, step_inizio_epoca, passaggi_consecutivi,
+                    )
+
             if step >= max_step:
                 break
         epoca += 1
+        step_inizio_epoca = step
 
     return {"step_finale": step, **ultima_valutazione}
 
@@ -225,8 +305,14 @@ def esegui_curriculum(config: dict, percorso_config: Path, solo_stadio: int | No
 
     # Con --stadio N (N non minimo) si riprende dal checkpoint dello stadio
     # precedente: il training dello stadio N parte SEMPRE dai pesi di N-1,
-    # mai da pesi casuali (FASE2_PIANO.md §7).
-    if solo_stadio is not None and solo_stadio > min(config["stadi"]):
+    # mai da pesi casuali (FASE2_PIANO.md §7). Se però esiste un checkpoint
+    # PARZIALE dello stadio N (run interrotto a metà), lo stadio N-1 non
+    # serve: si riprenderà dal parziale più sotto.
+    if (
+        solo_stadio is not None
+        and solo_stadio > min(config["stadi"])
+        and not (dir_risultati / f"stadio{solo_stadio}_parziale.pt").exists()
+    ):
         stadio_prec = max(s for s in config["stadi"] if s < solo_stadio)
         percorso_prec = dir_risultati / f"stadio{stadio_prec}.pt"
         if not percorso_prec.exists():
@@ -252,14 +338,25 @@ def esegui_curriculum(config: dict, percorso_config: Path, solo_stadio: int | No
         esempi_train_cumulativi.extend(carica_esempi(percorso_dataset(stadio, "train", config)))
         dev_record = _carica_record(percorso_dataset(stadio, "dev", config))
 
+        percorso_parziale = dir_risultati / f"stadio{stadio}_parziale.pt"
+        ripresa = None
+        if percorso_parziale.exists():
+            ripresa = carica_parziale(percorso_parziale, modello, ottimizzatore, stadio, device)
+            print(
+                f"ripresa intra-stadio da {percorso_parziale}: "
+                f"step {ripresa['step']}, epoca {ripresa['epoca']}"
+            )
+
         addestra_stadio(
             modello, ottimizzatore, config, stadio, esempi_train_cumulativi, dev_record,
             vocab, device, percorso_log, config["seed_torch"],
+            percorso_parziale=percorso_parziale, ripresa=ripresa,
         )
 
         percorso_ckpt = dir_risultati / f"stadio{stadio}.pt"
         torch.save({"modello": modello.state_dict()}, percorso_ckpt)
         print(f"checkpoint -> {percorso_ckpt}")
+        percorso_parziale.unlink(missing_ok=True)
 
         esame_record = _carica_record(percorso_dataset(stadio, "esame", config))
         modello.eval()

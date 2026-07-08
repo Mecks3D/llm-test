@@ -549,3 +549,139 @@ class TestRipresaDaCheckpoint:
         # assenti): l'errore atteso riguarda train.jsonl, NON il checkpoint.
         with pytest.raises(FileNotFoundError, match="train.jsonl"):
             esegui_curriculum(config, percorso_config, solo_stadio=2)
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 7 (parte addestra): checkpoint intra-stadio e ripresa da dentro
+# lo stadio (run interrotto a metà, es. Colab morto a 6500/20000 step)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.torch
+class TestCheckpointIntraStadio:
+    def _config(self, tmp_path):
+        return {
+            "nome_run": "run_test",
+            "device": "cpu",
+            "seed_torch": 0,
+            "percorsi": {
+                "dati_dir": str(tmp_path / "dati"),
+                "risultati_dir": str(tmp_path / "risultati"),
+            },
+            "dataset": {"ctx": 1024, "train_storie": 2, "dev_storie": 1,
+                        "esame_storie": 1, "n_per_tipo": 1},
+            "stadi": {
+                1: {"tipi": ["posizione"], "soglia": 0.95, "storie_corte": True},
+            },
+            "modello": {"n_layer": 1, "n_head": 2, "d_model": 8, "d_ff": 16,
+                        "dropout": 0.0},
+            "training": {"batch": 1, "accumulo": 1, "lr": 3.0e-4, "beta1": 0.9,
+                         "beta2": 0.95, "weight_decay": 0.1, "warmup_step": 1,
+                         "grad_clip": 1.0, "max_step": 4,
+                         "intervallo_valutazione": 2, "dev_campione": 1},
+        }
+
+    def _percorso_config(self, tmp_path, config):
+        import yaml
+        percorso = tmp_path / "config.yaml"
+        percorso.write_text(yaml.safe_dump(config), encoding="utf-8")
+        return percorso
+
+    def _scrivi_dataset(self, config):
+        from esami.genera import scrivi_dataset
+        for split in ("train", "dev", "esame"):
+            scrivi_dataset(1, split, config)
+
+    def test_parziale_salvato_a_ogni_valutazione(self, tmp_path):
+        import json
+        from cervello.addestra import addestra_stadio, crea_ottimizzatore
+        from cervello.dati import carica_esempi
+        from cervello.modello import ConfigModello, Modello
+        from esami.genera import percorso_dataset
+
+        config = self._config(tmp_path)
+        self._scrivi_dataset(config)
+        vocab = carica_vocabolario()
+        torch.manual_seed(0)
+        cfg = ConfigModello(vocab_size=vocab.dimensione, ctx=1024, **config["modello"])
+        modello = Modello(cfg)
+        ottimizzatore = crea_ottimizzatore(modello, config)
+
+        esempi = carica_esempi(percorso_dataset(1, "train", config))
+        with open(percorso_dataset(1, "dev", config), encoding="utf-8") as f:
+            dev_record = [json.loads(r) for r in f]
+        percorso_parziale = tmp_path / "stadio1_parziale.pt"
+
+        addestra_stadio(
+            modello, ottimizzatore, config, 1, esempi, dev_record, vocab, "cpu",
+            tmp_path / "log.jsonl", 0, percorso_parziale=percorso_parziale,
+        )
+
+        assert percorso_parziale.exists()
+        stato = torch.load(percorso_parziale, map_location="cpu")
+        assert stato["stadio"] == 1
+        assert stato["step"] == config["training"]["max_step"]
+        for chiave in ("epoca", "step_inizio_epoca", "passaggi_consecutivi",
+                       "modello", "ottimizzatore", "rng_torch"):
+            assert chiave in stato
+
+    def test_parziale_di_stadio_sbagliato_solleva(self, tmp_path):
+        from cervello.addestra import _salva_parziale, carica_parziale, crea_ottimizzatore
+        from cervello.modello import ConfigModello, Modello
+
+        config = self._config(tmp_path)
+        vocab = carica_vocabolario()
+        cfg = ConfigModello(vocab_size=vocab.dimensione, ctx=1024, **config["modello"])
+        torch.manual_seed(0)
+        modello = Modello(cfg)
+        ottimizzatore = crea_ottimizzatore(modello, config)
+        percorso = tmp_path / "stadio1_parziale.pt"
+        _salva_parziale(percorso, modello, ottimizzatore, 2, 1, 0, 0, 0)
+
+        with pytest.raises(ValueError, match="stadio 2"):
+            carica_parziale(percorso, modello, ottimizzatore, 1, "cpu")
+
+    def test_ripresa_riproduce_il_run_ininterrotto(self, tmp_path, monkeypatch):
+        """Run A: 4 step senza interruzioni. Run B: interrotto alla seconda
+        valutazione (step 4, dopo il parziale di step 2), poi ripreso dal
+        parziale. I pesi finali devono coincidere byte per byte (su CPU)."""
+        import cervello.addestra as addestra_mod
+        from cervello.addestra import esegui_curriculum
+
+        config = self._config(tmp_path)
+        percorso_config = self._percorso_config(tmp_path, config)
+        self._scrivi_dataset(config)
+        dir_risultati = tmp_path / "risultati" / "run_test"
+
+        # Run A: ininterrotto (l'esame fallisce, ma il checkpoint c'è).
+        esegui_curriculum(config, percorso_config, solo_stadio=1)
+        pesi_a = torch.load(dir_risultati / "stadio1.pt", map_location="cpu")["modello"]
+        import shutil
+        shutil.rmtree(dir_risultati)
+
+        # Run B, parte 1: interruzione simulata alla seconda valutazione.
+        valuta_originale = addestra_mod._valuta_dev
+        chiamate = {"n": 0}
+
+        def valuta_e_interrompi(*args, **kwargs):
+            chiamate["n"] += 1
+            if chiamate["n"] >= 2:
+                raise RuntimeError("interruzione simulata")
+            return valuta_originale(*args, **kwargs)
+
+        monkeypatch.setattr(addestra_mod, "_valuta_dev", valuta_e_interrompi)
+        with pytest.raises(RuntimeError, match="interruzione simulata"):
+            esegui_curriculum(config, percorso_config, solo_stadio=1)
+        monkeypatch.undo()
+
+        percorso_parziale = dir_risultati / "stadio1_parziale.pt"
+        assert percorso_parziale.exists()
+        assert torch.load(percorso_parziale, map_location="cpu")["step"] == 2
+
+        # Run B, parte 2: ripresa dal parziale fino a fine stadio.
+        esegui_curriculum(config, percorso_config, solo_stadio=1)
+        pesi_b = torch.load(dir_risultati / "stadio1.pt", map_location="cpu")["modello"]
+
+        assert not percorso_parziale.exists()  # rimosso a stadio completato
+        assert pesi_a.keys() == pesi_b.keys()
+        for chiave in pesi_a:
+            assert torch.equal(pesi_a[chiave], pesi_b[chiave]), chiave
