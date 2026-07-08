@@ -339,6 +339,10 @@ def esegui_curriculum(
             return True
         return False
 
+    # Anche il log si recupera: dopo una ripresa la curva di loss deve
+    # restare intera (è una consegna di T7), non ricominciare a metà.
+    _recupera_da_copia(percorso_log)
+
     cfg_modello = ConfigModello(vocab_size=vocab.dimensione, ctx=config["dataset"]["ctx"], **config["modello"])
     modello = Modello(cfg_modello).to(device)
 

@@ -102,7 +102,12 @@ che la v1 float supera gli esami degli stadi 1–3.
   file a 0 byte, ritardi di sync — issue colabtools #2102/#4426/#2607).
   Costo di ripresa: i batch già consumati dell'epoca in corso vengono
   rigenerati e scartati (secondi, non minuti). Perdita massima per
-  interruzione: un intervallo di valutazione (500 step).
+  interruzione: un intervallo di valutazione (500 step). Si recupera anche
+  `log.jsonl` (la curva di loss resta intera attraverso le riprese).
+  **Prova su Colab preparata, DA ESEGUIRE prima di T7**: sezione 6e del
+  notebook (~5 min, automatica) — uccide il fumo col SIGKILL al primo
+  parziale su Drive, cancella i risultati locali, rilancia e verifica la
+  ripresa; finisce con `PROVA SUPERATA`.
 - Non ancora fatto: T7 (run vero, stadi 1–3). Prossimo passo: ok esplicito
   di Andrea al run dello stadio 1 (~3h) e lancio della sezione 7 del
   notebook.

@@ -691,6 +691,7 @@ class TestCheckpointIntraStadio:
         solo la copia su Drive), si riparte da un runtime nuovo. Il parziale
         va recuperato dalla copia di sicurezza e i pesi finali devono
         coincidere con il run ininterrotto."""
+        import json
         import shutil
         import cervello.addestra as addestra_mod
         from cervello.addestra import esegui_curriculum
@@ -740,3 +741,9 @@ class TestCheckpointIntraStadio:
         assert (dir_copia / "esame_stadio1.json").exists()
         assert not (dir_copia / "stadio1_parziale.pt").exists()
         assert not (dir_risultati / "stadio1_parziale.pt").exists()
+        # Il log recuperato dalla copia mantiene la storia intera: la
+        # valutazione di prima dell'interruzione (step 2) più quella dopo
+        # la ripresa (step 4), senza buchi né ripartenze da zero.
+        with open(dir_risultati / "log.jsonl", encoding="utf-8") as f:
+            steps = [json.loads(r)["step"] for r in f]
+        assert steps == [2, 4], steps
