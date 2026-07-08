@@ -728,6 +728,96 @@ class TestCheckpointIntraStadio:
         for chiave in pesi_a:
             assert torch.equal(pesi_a[chiave], pesi_b[chiave]), chiave
 
+    def test_best_dev_guarda_il_massimo_non_lultimo(self, tmp_path, monkeypatch):
+        """§5.2 del piano anti-scorciatoia: stadio1_best.pt deve contenere i
+        pesi del momento con l'esattezza dev migliore, non dell'ultimo step,
+        anche quando l'ultima valutazione è peggiore."""
+        import json
+        import cervello.addestra as addestra_mod
+        from cervello.addestra import addestra_stadio, crea_ottimizzatore
+        from cervello.dati import carica_esempi
+        from cervello.modello import ConfigModello, Modello
+        from esami.genera import percorso_dataset
+
+        config = self._config(tmp_path)
+        self._scrivi_dataset(config)
+        vocab = carica_vocabolario()
+        torch.manual_seed(0)
+        cfg = ConfigModello(vocab_size=vocab.dimensione, ctx=1024, **config["modello"])
+        modello = Modello(cfg)
+        ottimizzatore = crea_ottimizzatore(modello, config)
+        esempi = carica_esempi(percorso_dataset(1, "train", config))
+        with open(percorso_dataset(1, "dev", config), encoding="utf-8") as f:
+            dev_record = [json.loads(r) for r in f]
+
+        pesi_al_meglio: dict = {}
+        sequenza_esattezza = [0.9, 0.2]  # step 2 (migliore), step 4 (peggiore)
+        chiamate = {"n": 0}
+
+        def _valuta_pilotata(modello, vocab, dev_record, config, device, rng):
+            idx = chiamate["n"]
+            chiamate["n"] += 1
+            if idx == 0:
+                pesi_al_meglio.update({k: v.clone() for k, v in modello.state_dict().items()})
+            return {"loss_dev": 0.0, "esattezza_dev": sequenza_esattezza[idx]}
+
+        monkeypatch.setattr(addestra_mod, "_valuta_dev", _valuta_pilotata)
+
+        percorso_parziale = tmp_path / "stadio1_parziale.pt"
+        percorso_best = tmp_path / "stadio1_best.pt"
+        addestra_stadio(
+            modello, ottimizzatore, config, 1, esempi, dev_record, vocab, "cpu",
+            tmp_path / "log.jsonl", 0, percorso_parziale=percorso_parziale,
+            percorso_best=percorso_best,
+        )
+
+        assert percorso_best.exists()
+        stato_best = torch.load(percorso_best, map_location="cpu")
+        assert stato_best["step"] == 2
+        assert stato_best["esattezza_dev"] == pytest.approx(0.9)
+        for chiave in pesi_al_meglio:
+            assert torch.equal(stato_best["modello"][chiave], pesi_al_meglio[chiave]), chiave
+
+    def test_best_dev_sopravvive_a_interruzione_e_ripresa(self, tmp_path, monkeypatch):
+        """Se il best (0,9 a step 2) è già stato visto prima di un crash, e
+        la valutazione successiva alla ripresa è peggiore (0,3 a step 4),
+        stadio1_best.pt deve restare quello di step 2 — prova che
+        `miglior_esattezza_dev` sopravvive dentro il checkpoint parziale
+        (altrimenti la ripresa lo resetterebbe a 0 e 0,3 lo batterebbe)."""
+        import cervello.addestra as addestra_mod
+        from cervello.addestra import esegui_curriculum
+
+        config = self._config(tmp_path)
+        percorso_config = self._percorso_config(tmp_path, config)
+        self._scrivi_dataset(config)
+        dir_risultati = tmp_path / "risultati" / "run_test"
+
+        pesi_al_meglio: dict = {}
+        chiamate = {"n": 0}
+
+        def _valuta_pilotata(modello, vocab, dev_record, config, device, rng):
+            chiamate["n"] += 1
+            if chiamate["n"] == 1:
+                pesi_al_meglio.update({k: v.clone() for k, v in modello.state_dict().items()})
+                return {"loss_dev": 0.0, "esattezza_dev": 0.9}
+            if chiamate["n"] == 2:
+                raise RuntimeError("interruzione simulata")
+            return {"loss_dev": 0.0, "esattezza_dev": 0.3}  # dopo la ripresa
+
+        monkeypatch.setattr(addestra_mod, "_valuta_dev", _valuta_pilotata)
+
+        with pytest.raises(RuntimeError, match="interruzione simulata"):
+            esegui_curriculum(config, percorso_config, solo_stadio=1)
+
+        # ripresa: stesso monkeypatch attivo (chiamate["n"] riparte da 2)
+        esegui_curriculum(config, percorso_config, solo_stadio=1)
+
+        stato_best = torch.load(dir_risultati / "stadio1_best.pt", map_location="cpu")
+        assert stato_best["step"] == 2
+        assert stato_best["esattezza_dev"] == pytest.approx(0.9)
+        for chiave in pesi_al_meglio:
+            assert torch.equal(stato_best["modello"][chiave], pesi_al_meglio[chiave]), chiave
+
     def test_ripresa_da_copia_di_sicurezza_dopo_perdita_del_locale(self, tmp_path, monkeypatch):
         """Scenario Colab: il runtime muore (filesystem locale PERSO, resta
         solo la copia su Drive), si riparte da un runtime nuovo. Il parziale

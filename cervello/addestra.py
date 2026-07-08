@@ -140,18 +140,21 @@ def _valuta_dev(
 def _salva_parziale(
     percorso: Path, modello: Modello, ottimizzatore: torch.optim.Optimizer,
     stadio: int, step: int, epoca: int, step_inizio_epoca: int,
-    passaggi_consecutivi: int,
+    passaggi_consecutivi: int, *, miglior_esattezza_dev: float = 0.0,
 ) -> None:
     """Checkpoint intra-stadio, scritto in modo atomico (file temporaneo +
     rename): un'interruzione durante la scrittura non corrompe il parziale
     precedente. Include lo stato RNG di torch così la ripresa consuma la
-    stessa sequenza casuale (dropout) del run ininterrotto."""
+    stessa sequenza casuale (dropout) del run ininterrotto, e il miglior
+    `esattezza_dev` visto finora (piano anti-scorciatoia §5.2) così la
+    ripresa non "dimentica" il best già visto."""
     stato = {
         "stadio": stadio,
         "step": step,
         "epoca": epoca,
         "step_inizio_epoca": step_inizio_epoca,
         "passaggi_consecutivi": passaggi_consecutivi,
+        "miglior_esattezza_dev": miglior_esattezza_dev,
         "modello": modello.state_dict(),
         "ottimizzatore": ottimizzatore.state_dict(),
         "rng_torch": torch.get_rng_state(),
@@ -165,10 +168,11 @@ def _salva_parziale(
 def carica_parziale(
     percorso: Path, modello: Modello, ottimizzatore: torch.optim.Optimizer,
     stadio: int, device: str,
-) -> dict[str, int]:
+) -> dict[str, Any]:
     """Carica un checkpoint intra-stadio dentro modello e ottimizzatore e
     ritorna la posizione di ripresa (step, epoca, step_inizio_epoca,
-    passaggi_consecutivi) da passare ad `addestra_stadio`."""
+    passaggi_consecutivi, miglior_esattezza_dev) da passare ad
+    `addestra_stadio`."""
     stato = torch.load(percorso, map_location=device)
     if stato["stadio"] != stadio:
         raise ValueError(
@@ -180,10 +184,23 @@ def carica_parziale(
     torch.set_rng_state(stato["rng_torch"].cpu())
     if stato.get("rng_cuda") is not None and torch.cuda.is_available():
         torch.cuda.set_rng_state_all([s.cpu() for s in stato["rng_cuda"]])
-    return {
+    ripresa = {
         chiave: stato[chiave]
         for chiave in ("step", "epoca", "step_inizio_epoca", "passaggi_consecutivi")
     }
+    ripresa["miglior_esattezza_dev"] = stato.get("miglior_esattezza_dev", 0.0)
+    return ripresa
+
+
+def _salva_best(percorso: Path, modello: Modello, step: int, esattezza_dev: float) -> None:
+    """Checkpoint del miglior `esattezza_dev` visto finora nello stadio
+    (piano anti-scorciatoia §5.2): stesso formato del checkpoint di fine
+    stadio (solo pesi, niente ottimizzatore) più `step`/`esattezza_dev` per
+    riferimento. Scrittura atomica come `_salva_parziale`."""
+    stato = {"modello": modello.state_dict(), "step": step, "esattezza_dev": esattezza_dev}
+    tmp = percorso.with_suffix(".tmp")
+    torch.save(stato, tmp)
+    tmp.replace(percorso)
 
 
 def _copia_sicurezza(sorgente: Path, dir_dest: Path) -> None:
@@ -203,14 +220,18 @@ def addestra_stadio(
     modello: Modello, ottimizzatore: torch.optim.Optimizer, config: dict, stadio: int,
     esempi_train: list[list[str]], dev_record: list[dict], vocab: Vocabolario, device: str,
     percorso_log: Path, seme: int, percorso_parziale: Path | None = None,
-    ripresa: dict[str, int] | None = None, dir_copia: Path | None = None,
+    ripresa: dict[str, Any] | None = None, dir_copia: Path | None = None,
+    percorso_best: Path | None = None,
 ) -> dict[str, Any]:
     """Allena finché l'esattezza dev supera soglia+0.01 per 2 valutazioni
     consecutive, o si raggiunge max_step. Logga ogni `intervallo_valutazione`
     step (loss train/dev, esattezza dev, token/sec) su `percorso_log`.
     Se `percorso_parziale` è dato, a ogni valutazione salva lì il checkpoint
     intra-stadio; con `ripresa` (da `carica_parziale`) riparte da dentro lo
-    stadio invece che da step 0."""
+    stadio invece che da step 0. Se `percorso_best` è dato, ad ogni
+    valutazione che supera il massimo `esattezza_dev` visto finora nello
+    stadio salva lì il modello (piano anti-scorciatoia §5.2); il massimo
+    sopravvive a una ripresa perché è parte del checkpoint parziale."""
     t = config["training"]
     soglia = config["stadi"][stadio]["soglia"]
     max_step, intervallo = t["max_step"], t["intervallo_valutazione"]
@@ -220,11 +241,13 @@ def addestra_stadio(
     step_inizio_epoca = 0
     salta_gruppi = 0
     passaggi_consecutivi = 0
+    miglior_esattezza_dev = 0.0
     if ripresa is not None:
         step = ripresa["step"]
         epoca = ripresa["epoca"]
         step_inizio_epoca = ripresa["step_inizio_epoca"]
         passaggi_consecutivi = ripresa["passaggi_consecutivi"]
+        miglior_esattezza_dev = ripresa.get("miglior_esattezza_dev", 0.0)
         salta_gruppi = step - step_inizio_epoca
     token_dal_log = 0
     t_ultimo_log = time.time()
@@ -275,6 +298,13 @@ def addestra_stadio(
                       f"esattezza_dev={ultima_valutazione['esattezza_dev']:.4f} "
                       f"tok/s={token_al_secondo:.0f}")
 
+                if ultima_valutazione["esattezza_dev"] > miglior_esattezza_dev:
+                    miglior_esattezza_dev = ultima_valutazione["esattezza_dev"]
+                    if percorso_best is not None:
+                        _salva_best(percorso_best, modello, step, miglior_esattezza_dev)
+                        if dir_copia is not None:
+                            _copia_sicurezza(percorso_best, dir_copia)
+
                 if ultima_valutazione["esattezza_dev"] >= soglia + 0.01:
                     passaggi_consecutivi += 1
                 else:
@@ -286,6 +316,7 @@ def addestra_stadio(
                     _salva_parziale(
                         percorso_parziale, modello, ottimizzatore, stadio,
                         step, epoca, step_inizio_epoca, passaggi_consecutivi,
+                        miglior_esattezza_dev=miglior_esattezza_dev,
                     )
                     if dir_copia is not None:
                         _copia_sicurezza(percorso_parziale, dir_copia)
@@ -397,6 +428,8 @@ def esegui_curriculum(
         dev_record = _carica_record(percorso_dataset(stadio, "dev", config))
 
         percorso_parziale = dir_risultati / f"stadio{stadio}_parziale.pt"
+        percorso_best = dir_risultati / f"stadio{stadio}_best.pt"
+        _recupera_da_copia(percorso_best)
         ripresa = None
         if _recupera_da_copia(percorso_parziale):
             ripresa = carica_parziale(percorso_parziale, modello, ottimizzatore, stadio, device)
@@ -409,7 +442,7 @@ def esegui_curriculum(
             modello, ottimizzatore, config, stadio, esempi_train_cumulativi, dev_record,
             vocab, device, percorso_log, config["seed_torch"],
             percorso_parziale=percorso_parziale, ripresa=ripresa,
-            dir_copia=copia_sicurezza,
+            dir_copia=copia_sicurezza, percorso_best=percorso_best,
         )
 
         percorso_ckpt = dir_risultati / f"stadio{stadio}.pt"
