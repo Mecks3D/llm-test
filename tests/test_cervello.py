@@ -685,3 +685,58 @@ class TestCheckpointIntraStadio:
         assert pesi_a.keys() == pesi_b.keys()
         for chiave in pesi_a:
             assert torch.equal(pesi_a[chiave], pesi_b[chiave]), chiave
+
+    def test_ripresa_da_copia_di_sicurezza_dopo_perdita_del_locale(self, tmp_path, monkeypatch):
+        """Scenario Colab: il runtime muore (filesystem locale PERSO, resta
+        solo la copia su Drive), si riparte da un runtime nuovo. Il parziale
+        va recuperato dalla copia di sicurezza e i pesi finali devono
+        coincidere con il run ininterrotto."""
+        import shutil
+        import cervello.addestra as addestra_mod
+        from cervello.addestra import esegui_curriculum
+
+        config = self._config(tmp_path)
+        percorso_config = self._percorso_config(tmp_path, config)
+        self._scrivi_dataset(config)
+        dir_risultati = tmp_path / "risultati" / "run_test"
+        dir_copia = tmp_path / "drive"
+
+        # Run A: ininterrotto, senza copia di sicurezza.
+        esegui_curriculum(config, percorso_config, solo_stadio=1)
+        pesi_a = torch.load(dir_risultati / "stadio1.pt", map_location="cpu")["modello"]
+        shutil.rmtree(dir_risultati)
+
+        # Run B: interrotto alla seconda valutazione, con copia su "Drive".
+        valuta_originale = addestra_mod._valuta_dev
+        chiamate = {"n": 0}
+
+        def valuta_e_interrompi(*args, **kwargs):
+            chiamate["n"] += 1
+            if chiamate["n"] >= 2:
+                raise RuntimeError("runtime morto")
+            return valuta_originale(*args, **kwargs)
+
+        monkeypatch.setattr(addestra_mod, "_valuta_dev", valuta_e_interrompi)
+        with pytest.raises(RuntimeError, match="runtime morto"):
+            esegui_curriculum(config, percorso_config, solo_stadio=1,
+                              copia_sicurezza=dir_copia)
+        monkeypatch.undo()
+
+        # Il parziale è stato replicato sulla copia; il locale muore.
+        assert (dir_copia / "stadio1_parziale.pt").exists()
+        assert (dir_copia / "log.jsonl").exists()
+        shutil.rmtree(dir_risultati)
+
+        # Runtime nuovo: si recupera dalla copia e si riprende.
+        esegui_curriculum(config, percorso_config, solo_stadio=1,
+                          copia_sicurezza=dir_copia)
+        pesi_b = torch.load(dir_risultati / "stadio1.pt", map_location="cpu")["modello"]
+
+        for chiave in pesi_a:
+            assert torch.equal(pesi_a[chiave], pesi_b[chiave]), chiave
+        # A stadio completato: checkpoint finale ed esito replicati sulla
+        # copia, parziale rimosso da entrambe le parti.
+        assert (dir_copia / "stadio1.pt").exists()
+        assert (dir_copia / "esame_stadio1.json").exists()
+        assert not (dir_copia / "stadio1_parziale.pt").exists()
+        assert not (dir_risultati / "stadio1_parziale.pt").exists()

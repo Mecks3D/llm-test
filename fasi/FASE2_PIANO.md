@@ -92,13 +92,17 @@ che la v1 float supera gli esami degli stadi 1–3.
   esiste al lancio, lo stadio riprende da lì (con `--stadio N` il parziale
   esonera dal checkpoint N−1). Su CPU la ripresa riproduce byte per byte il
   run ininterrotto (testato: run interrotto+ripreso == run intero); il
-  parziale si cancella a stadio completato. La sezione 7 del notebook ora
-  scrive i risultati direttamente su Drive (symlink `dati/risultati/v1`),
-  così il parziale sopravvive alla morte del runtime: dopo un'interruzione
-  basta rieseguire le celle, il resume è automatico. Costo di ripresa: i
-  batch già consumati dell'epoca in corso vengono rigenerati e scartati
-  (secondi, non minuti). Perdita massima per interruzione: un intervallo di
-  valutazione (500 step).
+  parziale si cancella a stadio completato. Persistenza su Colab: flag
+  `--copia-sicurezza DIR` — ogni checkpoint/log/esito appena scritto viene
+  REPLICATO in DIR (su Colab: cartella di Drive) e al lancio i checkpoint
+  mancanti in locale si recuperano da lì (runtime nuovo → resume
+  automatico, testato anche questo scenario). Si scrive sempre in locale e
+  si copia su Drive, MAI direttamente sul mount: scritture dirette nel
+  training loop sono notoriamente inaffidabili su Colab (celle bloccate,
+  file a 0 byte, ritardi di sync — issue colabtools #2102/#4426/#2607).
+  Costo di ripresa: i batch già consumati dell'epoca in corso vengono
+  rigenerati e scartati (secondi, non minuti). Perdita massima per
+  interruzione: un intervallo di valutazione (500 step).
 - Non ancora fatto: T7 (run vero, stadi 1–3). Prossimo passo: ok esplicito
   di Andrea al run dello stadio 1 (~3h) e lancio della sezione 7 del
   notebook.

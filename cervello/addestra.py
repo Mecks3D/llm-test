@@ -12,6 +12,11 @@ Checkpoint intra-stadio: a ogni valutazione si salva (atomicamente)
 nel curriculum; se il file esiste al lancio, il training dello stadio N
 riprende da lì invece che da capo (su CPU la ripresa riproduce byte per
 byte il run ininterrotto). Il parziale si cancella a stadio completato.
+Con `--copia-sicurezza DIR` (su Colab: una cartella di Drive) ogni file
+appena scritto viene replicato in DIR e i checkpoint mancanti in locale
+vengono recuperati da lì al lancio: i file si scrivono sempre in locale e
+si copiano, mai direttamente sul mount di Drive (inaffidabile in scrittura
+dentro un training loop).
 """
 from __future__ import annotations
 
@@ -181,11 +186,24 @@ def carica_parziale(
     }
 
 
+def _copia_sicurezza(sorgente: Path, dir_dest: Path) -> None:
+    """Copia un file nella directory di copia di sicurezza (`--copia-sicurezza`,
+    su Colab una cartella di Drive). Si scrive sempre in locale e si COPIA su
+    Drive, mai il contrario: scrivere direttamente sul mount di Drive dentro
+    il training loop è notoriamente inaffidabile (celle bloccate, file a 0
+    byte, ritardi di sync). Copia atomica rispetto ai lettori: tmp + rename."""
+    dir_dest.mkdir(parents=True, exist_ok=True)
+    dest = dir_dest / sorgente.name
+    tmp = dest.with_suffix(dest.suffix + ".tmp")
+    shutil.copy2(sorgente, tmp)
+    tmp.replace(dest)
+
+
 def addestra_stadio(
     modello: Modello, ottimizzatore: torch.optim.Optimizer, config: dict, stadio: int,
     esempi_train: list[list[str]], dev_record: list[dict], vocab: Vocabolario, device: str,
     percorso_log: Path, seme: int, percorso_parziale: Path | None = None,
-    ripresa: dict[str, int] | None = None,
+    ripresa: dict[str, int] | None = None, dir_copia: Path | None = None,
 ) -> dict[str, Any]:
     """Allena finché l'esattezza dev supera soglia+0.01 per 2 valutazioni
     consecutive, o si raggiunge max_step. Logga ogni `intervallo_valutazione`
@@ -269,6 +287,9 @@ def addestra_stadio(
                         percorso_parziale, modello, ottimizzatore, stadio,
                         step, epoca, step_inizio_epoca, passaggi_consecutivi,
                     )
+                    if dir_copia is not None:
+                        _copia_sicurezza(percorso_parziale, dir_copia)
+                        _copia_sicurezza(percorso_log, dir_copia)
 
             if step >= max_step:
                 break
@@ -283,9 +304,15 @@ def _carica_record(percorso: Path) -> list[dict]:
         return [json.loads(riga) for riga in f]
 
 
-def esegui_curriculum(config: dict, percorso_config: Path, solo_stadio: int | None = None) -> int:
+def esegui_curriculum(
+    config: dict, percorso_config: Path, solo_stadio: int | None = None,
+    copia_sicurezza: Path | None = None,
+) -> int:
     """Orchestrazione multi-stadio. Ritorna l'exit code (0 se tutti gli
-    stadi eseguiti superano il proprio esame)."""
+    stadi eseguiti superano il proprio esame). Con `copia_sicurezza` (una
+    directory, su Colab tipicamente su Drive) ogni checkpoint/log/esito
+    viene replicato lì appena scritto, e al lancio i checkpoint mancanti
+    in locale vengono recuperati da lì (runtime Colab nuovo)."""
     vocab = carica_vocabolario()
     device = dispositivo(config)
     torch.manual_seed(config["seed_torch"])
@@ -300,6 +327,18 @@ def esegui_curriculum(config: dict, percorso_config: Path, solo_stadio: int | No
     percorso_log = dir_risultati / "log.jsonl"
     shutil.copy(percorso_config, dir_risultati / "config.yaml")
 
+    def _recupera_da_copia(percorso: Path) -> bool:
+        """Se `percorso` manca in locale ma esiste nella copia di sicurezza
+        (es. runtime Colab nuovo dopo un'interruzione), lo riporta in locale."""
+        if percorso.exists() or copia_sicurezza is None:
+            return percorso.exists()
+        candidato = copia_sicurezza / percorso.name
+        if candidato.exists():
+            shutil.copy2(candidato, percorso)
+            print(f"recuperato dalla copia di sicurezza: {candidato} -> {percorso}")
+            return True
+        return False
+
     cfg_modello = ConfigModello(vocab_size=vocab.dimensione, ctx=config["dataset"]["ctx"], **config["modello"])
     modello = Modello(cfg_modello).to(device)
 
@@ -311,11 +350,11 @@ def esegui_curriculum(config: dict, percorso_config: Path, solo_stadio: int | No
     if (
         solo_stadio is not None
         and solo_stadio > min(config["stadi"])
-        and not (dir_risultati / f"stadio{solo_stadio}_parziale.pt").exists()
+        and not _recupera_da_copia(dir_risultati / f"stadio{solo_stadio}_parziale.pt")
     ):
         stadio_prec = max(s for s in config["stadi"] if s < solo_stadio)
         percorso_prec = dir_risultati / f"stadio{stadio_prec}.pt"
-        if not percorso_prec.exists():
+        if not _recupera_da_copia(percorso_prec):
             raise FileNotFoundError(
                 f"per riprendere dallo stadio {solo_stadio} serve il checkpoint "
                 f"dello stadio {stadio_prec}: {percorso_prec} non esiste "
@@ -340,7 +379,7 @@ def esegui_curriculum(config: dict, percorso_config: Path, solo_stadio: int | No
 
         percorso_parziale = dir_risultati / f"stadio{stadio}_parziale.pt"
         ripresa = None
-        if percorso_parziale.exists():
+        if _recupera_da_copia(percorso_parziale):
             ripresa = carica_parziale(percorso_parziale, modello, ottimizzatore, stadio, device)
             print(
                 f"ripresa intra-stadio da {percorso_parziale}: "
@@ -351,12 +390,18 @@ def esegui_curriculum(config: dict, percorso_config: Path, solo_stadio: int | No
             modello, ottimizzatore, config, stadio, esempi_train_cumulativi, dev_record,
             vocab, device, percorso_log, config["seed_torch"],
             percorso_parziale=percorso_parziale, ripresa=ripresa,
+            dir_copia=copia_sicurezza,
         )
 
         percorso_ckpt = dir_risultati / f"stadio{stadio}.pt"
         torch.save({"modello": modello.state_dict()}, percorso_ckpt)
         print(f"checkpoint -> {percorso_ckpt}")
+        if copia_sicurezza is not None:
+            _copia_sicurezza(percorso_ckpt, copia_sicurezza)
+            _copia_sicurezza(percorso_log, copia_sicurezza)
         percorso_parziale.unlink(missing_ok=True)
+        if copia_sicurezza is not None:
+            (copia_sicurezza / percorso_parziale.name).unlink(missing_ok=True)
 
         esame_record = _carica_record(percorso_dataset(stadio, "esame", config))
         modello.eval()
@@ -366,6 +411,8 @@ def esegui_curriculum(config: dict, percorso_config: Path, solo_stadio: int | No
         percorso_esame = dir_risultati / f"esame_stadio{stadio}.json"
         with open(percorso_esame, "w", encoding="utf-8") as f:
             json.dump(esito_esame, f, ensure_ascii=False, indent=2)
+        if copia_sicurezza is not None:
+            _copia_sicurezza(percorso_esame, copia_sicurezza)
 
         soglia = config["stadi"][stadio]["soglia"]
         print(f"stadio {stadio}: esattezza esame {esito_esame['esattezza']:.4f} (soglia {soglia}) -> {percorso_esame}")
@@ -380,10 +427,19 @@ def _cli() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", default=str(_PERCORSO_CONFIG_DEFAULT))
     ap.add_argument("--stadio", type=int, default=None)
+    ap.add_argument(
+        "--copia-sicurezza", type=Path, default=None,
+        help="directory (es. su Drive, da Colab) dove replicare checkpoint, "
+        "log ed esiti appena scritti; al lancio i checkpoint mancanti in "
+        "locale vengono recuperati da lì",
+    )
     args = ap.parse_args()
 
     config = carica_config(args.config)
-    codice = esegui_curriculum(config, Path(args.config), solo_stadio=args.stadio)
+    codice = esegui_curriculum(
+        config, Path(args.config), solo_stadio=args.stadio,
+        copia_sicurezza=args.copia_sicurezza,
+    )
     raise SystemExit(codice)
 
 
