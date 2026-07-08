@@ -111,6 +111,35 @@ che la v1 float supera gli esami degli stadi 1–3.
 - Non ancora fatto: T7 (run vero, stadi 1–3). Prossimo passo: ok esplicito
   di Andrea al run dello stadio 1 (~3h) e lancio della sezione 7 del
   notebook.
+- **T7 stadio 1 eseguito (2026-07-08): esame FALLITO.** `configs/v1.yaml`,
+  20.000 step, esattezza esame 0,573 (soglia 0,95; n=2400). Diagnosi dai
+  `campioni_non_esatti`: 0 malformate, poche invenzioni/astensioni errate
+  (9+17/2400) — sintassi e calibrazione a posto. Il 100% degli errori è un
+  grafo ben formato con la relazione giusta ma il **luogo sbagliato**, e
+  quel luogo è quasi sempre quello di un'ALTRA entità della stessa storia
+  (es. domanda su "anna", risposta con il luogo dove finisce "piero"):
+  confusione di *binding* entità→stato-finale con 6 personaggi che agiscono
+  in parallelo ogni tick, non un bug di pipeline (dati/training/checkpoint
+  riprodotti localmente su campione, stesso pattern). Notato anche: la dev
+  accuracy del log ha il picco (0,605) a step 18.000 e ridiscende a 0,57
+  allo step finale 20.000 — il checkpoint salvato è l'ultimo, non il
+  migliore (`addestra.py` non tiene traccia del best-dev).
+- **Esperimento "cast ridotto" (2026-07-08), eccezione alla decisione 8
+  (vedi §1.11)**: nuovo curriculum separato `configs/v1_facile.yaml` (run
+  `v1_facile`, non tocca `dati/stadio1/` né la run `v1`), storie con SOLO
+  3 personaggi (anna, piero, maria) invece di 6, che riparte dai pesi già
+  addestrati di `v1/stadio1.pt` invece che da pesi casuali (nuovo flag
+  `--pesi-iniziali` in `cervello/addestra.py`). 1500 storie, 6000 step
+  (un terzo dei dati/step del run pieno). Risultato: **esame 0,7448**
+  (n=1504, ancora sotto soglia 0,95, ma +17 punti rispetto a 0,573),
+  stesso identico pattern di errore (confusione di binding tra entità)
+  ma il 24,7% delle risposte invece del 41,6% — conferma che il numero di
+  entità in parallelo è la causa dominante della difficoltà, più del
+  numero di step. Dev accuracy in plateau rumoroso 0,64-0,73 da step
+  ~1200 in poi: non sembra un problema di "pochi step". Prossimo passo in
+  discussione con Andrea: incatenare questo checkpoint (cast 3) nello
+  stadio 1 a cast pieno via `--pesi-iniziali` (invece di ripartire da
+  pesi casuali), eventualmente con un livello intermedio a 4-5 personaggi.
 
 ---
 
@@ -176,6 +205,17 @@ addestrare su seed d'esame** — i seed ≥ 1.000.000 sono riservati agli esami.
 10. **Prima di ogni run lungo si misura e si chiede**: dopo il run di fumo
     si riportano i token/sec reali e la stima di durata del curriculum
     completo; run > 2 ore non si lanciano senza l'ok di Andrea.
+11. **Eccezione puntuale alla decisione 8 (cast ridotto in `mondo/`,
+    2026-07-08)**: dopo l'esame fallito dello stadio 1 (v1, cast pieno,
+    vedi "Stato di avanzamento"), Andrea ha approvato esplicitamente una
+    modifica minimale a `mondo/motore.py` e `mondo/simulatore.py` — un
+    parametro opzionale `persone`/`persone_cast` (default = cast pieno,
+    comportamento invariato e verificato byte-per-byte) per generare
+    storie con un sottoinsieme fisso di personaggi. Non revoca la
+    decisione 8: resta valido fermarsi e chiedere prima di toccare
+    `mondo/`/`lingua/`; qui è stato fatto. Il cast ridotto vive in un
+    config separato (`configs/v1_facile.yaml`, `dataset.cast`), mai in
+    `configs/v1.yaml`.
 
 ## 2. Struttura dei moduli
 
@@ -377,7 +417,12 @@ primo esame fallito (exit code ≠ 0). Il training dello stadio N parte dal
 checkpoint dello stadio N−1 e usa come train la CONCATENAZIONE dei train
 degli stadi ≤ N (ripasso: si aggiunge, non si sostituisce). Con
 `--stadio N` esegue solo quello stadio (per debug/ripresa). Il seed di
-torch e quello del mescolamento vengono dal config.
+torch e quello del mescolamento vengono dal config. Con `--pesi-iniziali
+PATH` (solo per il primo stadio della run) i pesi iniziali vengono caricati
+da un checkpoint ESTERNO invece che da pesi casuali — per bootstrappare una
+run nuova (config/dataset diverso, es. `configs/v1_facile.yaml`) da un
+modello già addestrato altrove; non interagisce con la catena N−1, che
+resta per la ripresa dentro la stessa run.
 
 `configs/v1.yaml` — tutte le scelte numeriche vivono qui, con questi
 default: `train_storie: 5000`, `dev_storie: 300`, `esame_storie: 300`,
