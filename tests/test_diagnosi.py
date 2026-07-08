@@ -1,0 +1,180 @@
+"""Test di esami/diagnosi.py (fasi/FASE2_PIANO_ANTISCORCIATOIA.md §5.3, §6.8).
+
+Le proprietà D1/D2/D3 sono già testate a fondo su storie sintetiche in
+test_esami.py::TestClassificazioneDifficolta; qui si verifica invece che
+`esegui_diagnosi` AGGREGHI correttamente baseline/condizionata/anatomia/
+per-entità su un "dataset giocattolo" con esiti costruiti a mano, usando un
+modello iniettato (nessun training reale) e `genera_storia` stubbato per
+poter controllare per intero gli eventi delle due storie di esempio.
+"""
+from __future__ import annotations
+
+import pytest
+
+torch = pytest.importorskip("torch")
+
+from mondo.grafo import grafo_fatto
+from mondo.simulatore import Storia
+from mondo.tipi import Evento, StatoMondo, StatoPersona
+
+from cervello.sequenza import grafo_a_token
+from cervello.vocabolario import carica_vocabolario
+
+import esami.diagnosi as diagnosi_mod
+
+
+def _persona(id_: str, luogo: str) -> StatoPersona:
+    return StatoPersona(id=id_, lemma=id_, genere="f", eta="adulto", luogo_preferito=None, luogo=luogo)
+
+
+def _stato(persone: dict[str, str]) -> StatoMondo:
+    return StatoMondo(
+        t=0, luoghi={}, collegamenti={},
+        persone={id_: _persona(id_, luogo) for id_, luogo in persone.items()},
+        oggetti={}, risorse={},
+    )
+
+
+# Storia A (seed 100): bersaglio "piero", ultima menzione a t=3 (giardino),
+# ma un evento di interferenza a t=4 (cucina, distanza_coda=1) e cucina è il
+# luogo più frequente della storia: D1 vero (oro=giardino != piu_frequente=
+# cucina), D2 falso, D3 falso (oro == luogo dell'ultima menzione).
+_STORIA_A = Storia(
+    seed=100,
+    eventi=(
+        Evento(t=1, azione="andare", agente="anna", luogo="cucina"),
+        Evento(t=2, azione="andare", agente="maria", luogo="cucina"),
+        Evento(t=3, azione="andare", agente="piero", luogo="giardino"),
+        Evento(t=4, azione="andare", agente="anna", luogo="cucina"),
+    ),
+    stato_finale=_stato({"anna": "cucina", "maria": "cucina", "piero": "giardino"}),
+)
+
+# Storia B (seed 200): bersaglio "sara", 5 eventi tutti in "orto": D1 falso
+# (oro == piu_frequente), D2 vero (distanza_coda=4), D3 falso.
+_STORIA_B = Storia(
+    seed=200,
+    eventi=(
+        Evento(t=1, azione="andare", agente="sara", luogo="orto"),
+        Evento(t=2, azione="andare", agente="anna", luogo="orto"),
+        Evento(t=3, azione="andare", agente="anna", luogo="orto"),
+        Evento(t=4, azione="andare", agente="anna", luogo="orto"),
+        Evento(t=5, azione="andare", agente="anna", luogo="orto"),
+    ),
+    stato_finale=_stato({"sara": "orto", "anna": "orto"}),
+)
+
+_STORIE = {100: _STORIA_A, 200: _STORIA_B}
+
+
+def _domanda_e_risposta(bersaglio: str, oro: str) -> tuple[list[str], list[str]]:
+    dom = grafo_a_token(grafo_fatto("trovarsi", nsubj=bersaglio, quesito="dove"))
+    ris = grafo_a_token(grafo_fatto("essere", nsubj=bersaglio, **{"obl:luogo": oro}))
+    return dom, ris
+
+
+class _ModelloMultiRisposta:
+    """Come `_ModelloIniettato` di test_esami.py, ma con una risposta
+    diversa per ogni sessione di decodifica successiva (una per esempio),
+    nell'ordine passato al costruttore."""
+
+    def __init__(self, vocab, risposte_token: list[list[str]]):
+        self._risposte_ids = [[vocab.id(t) for t in r] for r in risposte_token]
+        self._vocab_size = vocab.dimensione
+        self._sessione = -1
+        self._chiamate = 0
+        self._T_precedente = None
+        self.training = False
+
+    def eval(self):
+        self.training = False
+        return self
+
+    def train(self, mode=True):
+        self.training = mode
+        return self
+
+    def __call__(self, x):
+        B, T = x.shape
+        if self._T_precedente is None or T <= self._T_precedente:
+            self._sessione += 1
+            self._chiamate = 0
+        self._T_precedente = T
+        ids_output = self._risposte_ids[self._sessione]
+        idx = min(self._chiamate, len(ids_output) - 1)
+        prossimo_id = ids_output[idx]
+        self._chiamate += 1
+        logits = torch.full((B, T, self._vocab_size), -10.0)
+        logits[0, -1, prossimo_id] = 10.0
+        return logits
+
+
+@pytest.mark.torch
+class TestEseguiDiagnosi:
+    def test_metriche_2_a_4_calcolate_a_mano(self, monkeypatch):
+        monkeypatch.setattr(diagnosi_mod, "genera_storia", lambda seed, n_tick, persone: _STORIE[seed])
+        vocab = carica_vocabolario()
+
+        dom_a, ris_a = _domanda_e_risposta("piero", "giardino")
+        dom_b, ris_b = _domanda_e_risposta("sara", "orto")
+        record = [
+            {"seed": 100, "storia": [], "esempi": [{"tipo": "posizione", "domanda": dom_a, "risposta": ris_a}]},
+            {"seed": 200, "storia": [], "esempi": [{"tipo": "posizione", "domanda": dom_b, "risposta": ris_b}]},
+        ]
+
+        # esempio A: il modello risponde "cucina" (il luogo più frequente
+        # della storia A), sbagliando l'oro "giardino" -> categoria "errore".
+        # esempio B: il modello risponde correttamente "orto".
+        _, generato_a = _domanda_e_risposta("piero", "cucina")
+        risposte = [[*generato_a, "[FINE]"], [*ris_b, "[FINE]"]]
+        modello = _ModelloMultiRisposta(vocab, risposte)
+
+        config = {"stadi": {1: {"tipi": ["posizione"], "soglia": 0.95, "storie_corte": True}}, "dataset": {}}
+        esito = diagnosi_mod.esegui_diagnosi(modello, vocab, record, config, stadio=1, ctx=200, device="cpu")
+
+        assert esito["n_esempi"] == 2
+        assert esito["conteggi"] == {"esatto": 1, "invenzione": 0, "astensione_errata": 0, "malformata": 0, "errore": 1}
+        assert esito["esattezza"] == pytest.approx(0.5)
+        assert esito["n_posizione_oro_noto"] == 2
+
+        # metrica 2: baseline euristiche sul sottoinsieme oro noto (n=2)
+        assert esito["baseline"]["ultima_menzione"] == pytest.approx(1.0)  # entrambe: oro == ultima menzione
+        assert esito["baseline"]["piu_frequente"] == pytest.approx(0.5)   # solo B
+        assert esito["baseline"]["ultimo_evento"] == pytest.approx(0.5)   # solo B (ultimo evento storia B = orto)
+        assert esito["baseline"]["modello"] == pytest.approx(0.5)         # solo B esatto
+
+        # metrica 3: esattezza condizionata
+        cond = esito["condizionata"]
+        assert cond["oro_uguale_piu_frequente"]["si"] == {"esattezza": pytest.approx(1.0), "n": 1}  # B
+        assert cond["oro_uguale_piu_frequente"]["no"] == {"esattezza": pytest.approx(0.0), "n": 1}  # A
+        assert cond["distanza_coda"]["1-2"] == {"esattezza": pytest.approx(0.0), "n": 1}  # A: distanza 1
+        assert cond["distanza_coda"]["3-5"] == {"esattezza": pytest.approx(1.0), "n": 1}  # B: distanza 4
+        assert cond["distanza_coda"]["0"] == {"esattezza": 0.0, "n": 0}
+        assert cond["distanza_coda"][">=6"] == {"esattezza": 0.0, "n": 0}
+        assert cond["d3_tracking_puro"]["no"] == {"esattezza": pytest.approx(0.5), "n": 2}  # A e B: D3 falso
+        assert cond["d3_tracking_puro"]["si"] == {"esattezza": 0.0, "n": 0}
+
+        # metrica 4: anatomia degli errori (solo la categoria "errore": A)
+        assert esito["anatomia_errori"] == {"piu_frequente": 1}
+
+        # metrica 5: esattezza per entità
+        assert esito["per_entita"]["piero"] == {"esattezza": pytest.approx(0.0), "n": 1}
+        assert esito["per_entita"]["sara"] == {"esattezza": pytest.approx(1.0), "n": 1}
+
+    def test_max_esempi_limita_il_conteggio(self, monkeypatch):
+        monkeypatch.setattr(diagnosi_mod, "genera_storia", lambda seed, n_tick, persone: _STORIE[seed])
+        vocab = carica_vocabolario()
+        dom_a, ris_a = _domanda_e_risposta("piero", "giardino")
+        dom_b, ris_b = _domanda_e_risposta("sara", "orto")
+        record = [
+            {"seed": 100, "storia": [], "esempi": [{"tipo": "posizione", "domanda": dom_a, "risposta": ris_a}]},
+            {"seed": 200, "storia": [], "esempi": [{"tipo": "posizione", "domanda": dom_b, "risposta": ris_b}]},
+        ]
+        modello = _ModelloMultiRisposta(vocab, [[*ris_a, "[FINE]"], [*ris_b, "[FINE]"]])
+        config = {"stadi": {1: {"tipi": ["posizione"], "soglia": 0.95, "storie_corte": True}}, "dataset": {}}
+
+        esito = diagnosi_mod.esegui_diagnosi(
+            modello, vocab, record, config, stadio=1, ctx=200, device="cpu", max_esempi=1,
+        )
+        assert esito["n_esempi"] == 1
+        assert esito["n_posizione_oro_noto"] == 1
