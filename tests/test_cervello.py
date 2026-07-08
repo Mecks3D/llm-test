@@ -818,6 +818,54 @@ class TestCheckpointIntraStadio:
         for chiave in pesi_al_meglio:
             assert torch.equal(stato_best["modello"][chiave], pesi_al_meglio[chiave]), chiave
 
+    def test_best_dev_sopravvive_a_perdita_totale_del_locale(self, tmp_path, monkeypatch):
+        """Scenario Colab per il best-dev (non solo per parziale/log, già
+        coperto da test_ripresa_da_copia_di_sicurezza_dopo_perdita_del_locale):
+        il best (0,9 a step 2) è replicato su Drive: il runtime muore, il
+        locale sparisce del tutto, un runtime nuovo recupera stadio1_best.pt
+        da Drive E lo lascia intatto quando la valutazione successiva (0,3)
+        è peggiore."""
+        import cervello.addestra as addestra_mod
+        from cervello.addestra import esegui_curriculum
+
+        config = self._config(tmp_path)
+        percorso_config = self._percorso_config(tmp_path, config)
+        self._scrivi_dataset(config)
+        dir_risultati = tmp_path / "risultati" / "run_test"
+        dir_copia = tmp_path / "drive"
+
+        pesi_al_meglio: dict = {}
+        chiamate = {"n": 0}
+
+        def _valuta_pilotata(modello, vocab, dev_record, config, device, rng):
+            chiamate["n"] += 1
+            if chiamate["n"] == 1:
+                pesi_al_meglio.update({k: v.clone() for k, v in modello.state_dict().items()})
+                return {"loss_dev": 0.0, "esattezza_dev": 0.9}
+            if chiamate["n"] == 2:
+                raise RuntimeError("runtime morto")
+            return {"loss_dev": 0.0, "esattezza_dev": 0.3}  # dopo la ripresa
+
+        monkeypatch.setattr(addestra_mod, "_valuta_dev", _valuta_pilotata)
+
+        with pytest.raises(RuntimeError, match="runtime morto"):
+            esegui_curriculum(config, percorso_config, solo_stadio=1, copia_sicurezza=dir_copia)
+
+        # Il best (step 2) è già stato replicato su Drive prima del crash.
+        assert (dir_copia / "stadio1_best.pt").exists()
+        import shutil
+        shutil.rmtree(dir_risultati)  # il locale sparisce del tutto
+
+        # Runtime nuovo: recupera parziale, log E best dalla copia.
+        esegui_curriculum(config, percorso_config, solo_stadio=1, copia_sicurezza=dir_copia)
+
+        for cartella in (dir_risultati, dir_copia):
+            stato_best = torch.load(cartella / "stadio1_best.pt", map_location="cpu")
+            assert stato_best["step"] == 2
+            assert stato_best["esattezza_dev"] == pytest.approx(0.9)
+            for chiave in pesi_al_meglio:
+                assert torch.equal(stato_best["modello"][chiave], pesi_al_meglio[chiave]), chiave
+
     def test_ripresa_da_copia_di_sicurezza_dopo_perdita_del_locale(self, tmp_path, monkeypatch):
         """Scenario Colab: il runtime muore (filesystem locale PERSO, resta
         solo la copia su Drive), si riparte da un runtime nuovo. Il parziale
