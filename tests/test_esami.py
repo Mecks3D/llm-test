@@ -178,6 +178,135 @@ class TestCaricaConfig:
 
 
 # ---------------------------------------------------------------------------
+# Gruppo 8: esperimento anti-scorciatoia
+# (fasi/FASE2_PIANO_ANTISCORCIATOIA.md §2-§4, §6)
+# ---------------------------------------------------------------------------
+
+from mondo.domande import Domanda
+from mondo.grafo import NON_LO_SO, grafo_fatto
+from mondo.simulatore import Storia
+from mondo.tipi import Evento, StatoMondo
+from esami.genera import _classifica_domanda_posizione, _seleziona_posizione
+
+
+def _stato_con_persone(*id_persone: str) -> StatoMondo:
+    return StatoMondo(t=0, luoghi={}, collegamenti={}, persone={p: None for p in id_persone}, oggetti={}, risorse={})
+
+
+def _storia_sintetica(eventi: list[Evento], persone: tuple[str, ...] = ("anna", "piero", "maria")) -> Storia:
+    return Storia(seed=0, eventi=tuple(eventi), stato_finale=_stato_con_persone(*persone))
+
+
+def _domanda_posizione(bersaglio: str, oro_luogo: str | None) -> Domanda:
+    grafo_domanda = grafo_fatto("trovarsi", nsubj=bersaglio, quesito="dove")
+    if oro_luogo is None:
+        risposta = NON_LO_SO
+    else:
+        risposta = grafo_fatto("essere", nsubj=bersaglio, **{"obl:luogo": oro_luogo})
+    return Domanda("posizione", grafo_domanda, risposta)
+
+
+class TestClassificazioneDifficolta:
+    def test_non_lo_so(self):
+        storia = _storia_sintetica([Evento(t=1, azione="andare", agente="anna", luogo="cucina")])
+        domanda = _domanda_posizione("piero", None)
+        assert _classifica_domanda_posizione(storia, domanda) == "non-lo-so"
+
+    def test_d1_oro_diverso_dal_luogo_piu_frequente(self):
+        eventi = [
+            Evento(t=1, azione="andare", agente="anna", luogo="cucina"),
+            Evento(t=2, azione="andare", agente="maria", luogo="cucina"),
+            Evento(t=3, azione="andare", agente="piero", luogo="giardino"),
+            Evento(t=4, azione="andare", agente="anna", luogo="cucina"),
+        ]
+        storia = _storia_sintetica(eventi)
+        domanda = _domanda_posizione("piero", "giardino")
+        assert _classifica_domanda_posizione(storia, domanda) == "difficile"
+
+    def test_d2_distanza_coda_lunga(self):
+        eventi = [
+            Evento(t=1, azione="andare", agente="piero", luogo="giardino"),
+            Evento(t=2, azione="andare", agente="anna", luogo="giardino"),
+            Evento(t=3, azione="andare", agente="anna", luogo="giardino"),
+            Evento(t=4, azione="andare", agente="anna", luogo="giardino"),
+            Evento(t=5, azione="andare", agente="anna", luogo="giardino"),
+        ]
+        storia = _storia_sintetica(eventi)
+        domanda = _domanda_posizione("piero", "giardino")
+        assert _classifica_domanda_posizione(storia, domanda) == "difficile"
+
+    def test_d3_oggetto_trasportato_senza_ricomenzione(self):
+        eventi = [
+            Evento(t=1, azione="prendere", agente="anna", oggetto="palla", luogo="cucina"),
+            Evento(t=2, azione="andare", agente="anna", luogo="salotto", luogo_origine="cucina"),
+        ]
+        storia = _storia_sintetica(eventi)
+        domanda = _domanda_posizione("palla", "salotto")
+        assert _classifica_domanda_posizione(storia, domanda) == "difficile"
+
+    def test_facile(self):
+        eventi = [
+            Evento(t=1, azione="andare", agente="anna", luogo="cucina"),
+            Evento(t=2, azione="andare", agente="maria", luogo="cucina"),
+            Evento(t=3, azione="andare", agente="piero", luogo="cucina"),
+        ]
+        storia = _storia_sintetica(eventi)
+        domanda = _domanda_posizione("piero", "cucina")
+        assert _classifica_domanda_posizione(storia, domanda) == "facile"
+
+    def test_cercare_non_conta_come_menzione_di_un_oggetto(self):
+        # "cercare X" dice che X NON è lì: non stabilisce la posizione, quindi
+        # non deve contare come "ultima menzione" (stessa esclusione di
+        # mondo/domande.py::_oggetti_con_posizione_nota).
+        eventi = [
+            Evento(t=1, azione="prendere", agente="anna", oggetto="palla", luogo="cucina"),
+            Evento(t=2, azione="andare", agente="anna", luogo="salotto", luogo_origine="cucina"),
+            Evento(t=3, azione="cercare", agente="piero", oggetto="palla", luogo="giardino"),
+        ]
+        storia = _storia_sintetica(eventi)
+        domanda = _domanda_posizione("palla", "salotto")
+        # l'ultima menzione VALIDA resta t=1 (prendere), non t=3 (cercare):
+        # stessa distanza_coda e stesso esito di test_d3 sopra.
+        assert _classifica_domanda_posizione(storia, domanda) == "difficile"
+
+
+class TestSelezioneAntiScorciatoia:
+    def test_quota_difficili_e_non_lo_so_rispettate_su_storie_reali(self, tmp_path):
+        config = _config_piccolo(
+            tmp_path, train_storie=50,
+            anti_scorciatoia={"quota_difficili": 0.6, "candidate_per_tipo": 999},
+        )
+        conteggi = {"difficile": 0, "facile": 0, "non-lo-so": 0}
+        for seed in finestra_seed(1, "train", config):
+            record = genera_record(1, seed, config)
+            for esempio in record["esempi"]:
+                assert "difficolta" in esempio
+                conteggi[esempio["difficolta"]] += 1
+
+        totale = sum(conteggi.values())
+        noti = conteggi["difficile"] + conteggi["facile"]
+        assert conteggi["difficile"] / noti >= 0.6 - 0.15  # tolleranza: storie povere di candidate
+        assert 0.10 <= conteggi["non-lo-so"] / totale <= 0.30
+
+    def test_senza_anti_scorciatoia_niente_campo_difficolta(self, tmp_path):
+        config = _config_piccolo(tmp_path)
+        record = genera_record(1, 0, config)
+        for esempio in record["esempi"]:
+            assert "difficolta" not in esempio
+
+    def test_dev_ed_esame_non_toccati_dalla_selezione(self, tmp_path):
+        config_base = _config_piccolo(tmp_path / "base")
+        config_anti = _config_piccolo(
+            tmp_path / "anti",
+            anti_scorciatoia={"quota_difficili": 0.6, "candidate_per_tipo": 999},
+        )
+        for split in ("dev", "esame"):
+            record_base = genera_dataset(1, split, config_base)
+            record_anti = genera_dataset(1, split, config_anti)
+            assert record_base == record_anti
+
+
+# ---------------------------------------------------------------------------
 # Gruppo 7: esami/esamina.py — decodifica greedy + confronto grafo vs grafo
 # ---------------------------------------------------------------------------
 
