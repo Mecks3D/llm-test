@@ -551,6 +551,48 @@ class TestRipresaDaCheckpoint:
             esegui_curriculum(config, percorso_config, solo_stadio=2)
 
 
+@pytest.mark.torch
+class TestPesiIniziali:
+    """--pesi-iniziali fa ripartire il PRIMO stadio di una run da un
+    checkpoint esterno (es. curriculum "facile" che riparte dai pesi di
+    una run diversa), invece che da pesi casuali."""
+
+    def _config(self, tmp_path):
+        return TestRipresaDaCheckpoint._config(self, tmp_path)
+
+    def _percorso_config(self, tmp_path, config):
+        return TestRipresaDaCheckpoint._percorso_config(self, tmp_path, config)
+
+    def test_valido_solo_per_il_primo_stadio(self, tmp_path):
+        from cervello.addestra import esegui_curriculum
+        config = self._config(tmp_path)
+        percorso_config = self._percorso_config(tmp_path, config)
+        with pytest.raises(ValueError, match="primo stadio"):
+            esegui_curriculum(
+                config, percorso_config, solo_stadio=2,
+                pesi_iniziali=tmp_path / "non_esiste.pt",
+            )
+
+    def test_carica_i_pesi_e_prosegue(self, tmp_path):
+        from cervello.addestra import esegui_curriculum
+        from cervello.modello import ConfigModello, Modello
+        config = self._config(tmp_path)
+        percorso_config = self._percorso_config(tmp_path, config)
+
+        vocab = carica_vocabolario()
+        cfg = ConfigModello(vocab_size=vocab.dimensione, ctx=64, **config["modello"])
+        torch.manual_seed(0)
+        percorso_pesi = tmp_path / "esterno.pt"
+        torch.save({"modello": Modello(cfg).state_dict()}, percorso_pesi)
+
+        # I pesi vengono caricati e si prosegue fino ai dataset (qui
+        # assenti): l'errore atteso riguarda train.jsonl, NON i pesi.
+        with pytest.raises(FileNotFoundError, match="train.jsonl"):
+            esegui_curriculum(
+                config, percorso_config, solo_stadio=1, pesi_iniziali=percorso_pesi,
+            )
+
+
 # ---------------------------------------------------------------------------
 # Gruppo 7 (parte addestra): checkpoint intra-stadio e ripresa da dentro
 # lo stadio (run interrotto a metà, es. Colab morto a 6500/20000 step)

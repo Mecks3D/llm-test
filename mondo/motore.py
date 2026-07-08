@@ -40,12 +40,18 @@ def _prossimo_salto_verso(destinazione: str) -> dict[str, str]:
 _PROSSIMO_SALTO_VERSO_SALOTTO = _prossimo_salto_verso("salotto")
 
 
-def costruisci_stato_iniziale(rng: random.Random) -> StatoMondo:
+def costruisci_stato_iniziale(
+    rng: random.Random, persone_cast: tuple[dm.Persona, ...] = dm.PERSONE,
+) -> StatoMondo:
     """Stato iniziale estratto per seed (FASE0.md, "stato iniziale ignoto"):
     posizioni di persone e oggetti, contenimento, aperto/chiuso e quantità
     delle risorse sono fatti contingenti, diversi da storia a storia. Solo
     la struttura (luoghi, famiglia, arredi, regole) è fissa. L'ordine delle
-    estrazioni segue l'ordine dei dati in dati_mondo.py -> determinismo."""
+    estrazioni segue l'ordine dei dati in dati_mondo.py -> determinismo.
+
+    `persone_cast` di default è il cast pieno (`dm.PERSONE`): un cast ridotto
+    (curriculum a difficoltà crescente) è un sottoinsieme esplicito, mai
+    scelto qui dentro."""
     luoghi = {l.id: StatoLuogo(id=l.id, lemma=l.lemma) for l in dm.LUOGHI}
     collegamenti = dm.costruisci_collegamenti()
     ids_luoghi = [l.id for l in dm.LUOGHI]
@@ -55,7 +61,7 @@ def costruisci_stato_iniziale(rng: random.Random) -> StatoMondo:
             id=p.id, lemma=p.lemma, genere=p.genere, eta=p.eta,
             luogo_preferito=p.luogo_preferito, luogo=rng.choice(ids_luoghi),
         )
-        for p in dm.PERSONE
+        for p in persone_cast
     }
 
     oggetti: dict[str, StatoOggetto] = {}
@@ -196,9 +202,15 @@ def _aggiorna_camino(stato: StatoMondo, t: int) -> Optional[Evento]:
     return None
 
 
-def avanza_tick(stato: StatoMondo, rng: random.Random, t: int) -> list[Evento]:
+def avanza_tick(
+    stato: StatoMondo, rng: random.Random, t: int,
+    persone_cast: tuple[dm.Persona, ...] = dm.PERSONE,
+) -> list[Evento]:
+    """`persone_cast` di default è il cast pieno; deve combaciare con quello
+    usato in `costruisci_stato_iniziale` per la stessa storia (altrimenti
+    `stato.persone` non conterrebbe l'agente)."""
     eventi: list[Evento] = []
-    for persona in dm.PERSONE:  # ordine fisso -> riproducibilità
+    for persona in persone_cast:  # ordine fisso -> riproducibilità
         scelta = scegli_azione(stato, persona.id, rng)
         if scelta is None:  # sta dormendo: nessun evento questo tick
             continue

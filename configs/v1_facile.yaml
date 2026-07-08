@@ -1,0 +1,64 @@
+# Curriculum "facile": storie con cast ridotto (2-3 personaggi invece di 6),
+# per allentare la confusione di binding entità->luogo osservata nell'esame
+# dello stadio 1 di v1.yaml (0.573 di esattezza, soglia 0.95 — vedi log del
+# 2026-07-08). Run separata da "v1": non tocca dataset/checkpoint esistenti.
+#
+# Pensata per continuare l'allenamento da un checkpoint già addestrato sul
+# cast pieno (--pesi-iniziali, cervello/addestra.py), non per ripartire da
+# zero: il blocco `modello:` deve restare IDENTICO a quello del checkpoint
+# di origine (stesse shape dei pesi, in particolare ctx per pos_emb).
+
+nome_run: v1_facile
+device: auto
+seed_torch: 1337
+
+percorsi:
+  lessico: lingua/lessico.tsv
+  vocabolario: cervello/vocabolario.json
+  dati_dir: dati/facile
+  risultati_dir: dati/risultati
+
+# -----------------------------------------------------------------------
+# Dataset (esami/genera.py)
+# -----------------------------------------------------------------------
+dataset:
+  ctx: 3072
+  train_storie: 1500
+  dev_storie: 200
+  esame_storie: 200
+  n_per_tipo: 8
+  cast: [anna, piero, maria]  # sottoinsieme fisso di dati_mondo.PERSONE
+
+stadi:
+  1:
+    tipi: [posizione]
+    soglia: 0.95
+    storie_corte: true  # 3-6 tick
+
+# -----------------------------------------------------------------------
+# Modello — IDENTICO a configs/v1.yaml: deve combaciare con i pesi di
+# partenza caricati via --pesi-iniziali (shape di tok_emb/pos_emb/attn).
+# -----------------------------------------------------------------------
+modello:
+  n_layer: 8
+  n_head: 8
+  d_model: 256
+  d_ff: 1024
+  dropout: 0.1
+
+# -----------------------------------------------------------------------
+# Training — step bassi (curriculum leggero, si riparte da pesi già
+# addestrati, non da zero): valori orientativi, aggiustabili prima del run.
+# -----------------------------------------------------------------------
+training:
+  batch: 4
+  accumulo: 8
+  lr: 3.0e-4
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  warmup_step: 100
+  grad_clip: 1.0
+  max_step: 6000
+  intervallo_valutazione: 300
+  dev_campione: 200

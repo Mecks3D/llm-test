@@ -6,7 +6,9 @@ import json
 import pytest
 
 from cervello.sequenza import componi_esempio
+from mondo import dati_mondo as dm
 from esami.genera import (
+    _cast_persone,
     _n_tick,
     _verifica_seed,
     carica_config,
@@ -107,6 +109,30 @@ class TestStadio1StorieCorteSolaPosizione:
             record = genera_record(1, seed, config)
             for esempio in record["esempi"]:
                 assert esempio["tipo"] == "posizione"
+
+
+class TestCastPersone:
+    def test_assente_ritorna_none(self, tmp_path):
+        config = _config_piccolo(tmp_path)
+        assert _cast_persone(config) is None
+
+    def test_cast_valido_filtra_preservando_ordine(self, tmp_path):
+        config = _config_piccolo(tmp_path, cast=["maria", "anna"])
+        persone = _cast_persone(config)
+        assert [p.id for p in persone] == ["anna", "maria"]  # ordine di dm.PERSONE
+
+    def test_cast_con_id_sconosciuto_solleva(self, tmp_path):
+        config = _config_piccolo(tmp_path, cast=["anna", "pinco"])
+        with pytest.raises(ValueError, match="pinco"):
+            _cast_persone(config)
+
+    def test_genera_record_rispetta_il_cast(self, tmp_path):
+        cast_ids = {"anna", "piero", "maria"}
+        config = _config_piccolo(tmp_path, cast=sorted(cast_ids))
+        for seed in range(10):
+            record = genera_record(1, seed, config)
+            entita_storia = {tok for tok in record["storia"] if tok in {p.id for p in dm.PERSONE}}
+            assert entita_storia <= cast_ids
 
 
 class TestSequenzaComposta:

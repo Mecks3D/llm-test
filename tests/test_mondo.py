@@ -338,3 +338,34 @@ class TestGrafo:
         domande = genera_domande(storia, rng, n_per_tipo=10)
         non_lo_so = [d for d in domande if d.grafo_risposta.nodi[0].lemma == "non-lo-so"]
         assert non_lo_so, "nessuna domanda 'non lo so' generata in questo campione"
+
+
+# ---------------------------------------------------------------------------
+# Cast ridotto (curriculum a difficoltà crescente: storie con meno
+# personaggi, es. stadio "facile" prima dello stadio 1 pieno)
+# ---------------------------------------------------------------------------
+
+class TestCastRidotto:
+    def test_default_invariato_byte_per_byte(self):
+        """Senza `persone`, il comportamento deve restare identico a prima
+        della modifica (nessun impatto sulle run esistenti)."""
+        for seed in SEED_DI_PROVA[:10]:
+            s1 = genera_storia(seed=seed, n_tick=20)
+            s2 = genera_storia(seed=seed, n_tick=20, persone=None)
+            assert s1.eventi == s2.eventi
+            assert s1.stato_finale.persone.keys() == s2.stato_finale.persone.keys()
+            assert set(s1.stato_finale.persone.keys()) == {p.id for p in dm.PERSONE}
+
+    def test_cast_ridotto_solo_quelle_persone_agiscono(self):
+        cast = tuple(p for p in dm.PERSONE if p.id in {"anna", "piero", "maria"})
+        for seed in (0, 1, 42, 12345):
+            storia = genera_storia(seed=seed, n_tick=6, persone=cast)
+            assert set(storia.stato_finale.persone.keys()) == {"anna", "piero", "maria"}
+            agenti = {e.agente for e in storia.eventi} - {"camino"}
+            assert agenti <= {"anna", "piero", "maria"}
+
+    def test_cast_ridotto_deterministico(self):
+        cast = tuple(p for p in dm.PERSONE if p.id in {"anna", "piero", "maria"})
+        s1 = genera_storia(seed=7, n_tick=10, persone=cast)
+        s2 = genera_storia(seed=7, n_tick=10, persone=cast)
+        assert s1.eventi == s2.eventi

@@ -306,13 +306,18 @@ def _carica_record(percorso: Path) -> list[dict]:
 
 def esegui_curriculum(
     config: dict, percorso_config: Path, solo_stadio: int | None = None,
-    copia_sicurezza: Path | None = None,
+    copia_sicurezza: Path | None = None, pesi_iniziali: Path | None = None,
 ) -> int:
     """Orchestrazione multi-stadio. Ritorna l'exit code (0 se tutti gli
     stadi eseguiti superano il proprio esame). Con `copia_sicurezza` (una
     directory, su Colab tipicamente su Drive) ogni checkpoint/log/esito
     viene replicato lì appena scritto, e al lancio i checkpoint mancanti
-    in locale vengono recuperati da lì (runtime Colab nuovo)."""
+    in locale vengono recuperati da lì (runtime Colab nuovo).
+
+    `pesi_iniziali` fa ripartire un curriculum NUOVO (run diversa, es. un
+    dataset più semplice) dai pesi di un checkpoint esterno invece che da
+    pesi casuali — valido solo per il primo stadio della run: per stadi
+    successivi si usa già la catena N-1 dentro la stessa run."""
     vocab = carica_vocabolario()
     device = dispositivo(config)
     torch.manual_seed(config["seed_torch"])
@@ -345,6 +350,16 @@ def esegui_curriculum(
 
     cfg_modello = ConfigModello(vocab_size=vocab.dimensione, ctx=config["dataset"]["ctx"], **config["modello"])
     modello = Modello(cfg_modello).to(device)
+
+    if pesi_iniziali is not None:
+        if solo_stadio is not None and solo_stadio != min(config["stadi"]):
+            raise ValueError(
+                "--pesi-iniziali è valido solo per il primo stadio della run "
+                f"(min={min(config['stadi'])}, richiesto solo_stadio={solo_stadio})"
+            )
+        stato = torch.load(pesi_iniziali, map_location=device)
+        modello.load_state_dict(stato["modello"])
+        print(f"pesi iniziali caricati da {pesi_iniziali}")
 
     # Con --stadio N (N non minimo) si riprende dal checkpoint dello stadio
     # precedente: il training dello stadio N parte SEMPRE dai pesi di N-1,
@@ -437,12 +452,19 @@ def _cli() -> None:
         "log ed esiti appena scritti; al lancio i checkpoint mancanti in "
         "locale vengono recuperati da lì",
     )
+    ap.add_argument(
+        "--pesi-iniziali", type=Path, default=None,
+        help="checkpoint esterno (.pt) da cui caricare i pesi iniziali del "
+        "primo stadio di questa run, invece di pesi casuali (es. per "
+        "continuare l'allenamento di un modello già addestrato su un "
+        "curriculum diverso/più semplice)",
+    )
     args = ap.parse_args()
 
     config = carica_config(args.config)
     codice = esegui_curriculum(
         config, Path(args.config), solo_stadio=args.stadio,
-        copia_sicurezza=args.copia_sicurezza,
+        copia_sicurezza=args.copia_sicurezza, pesi_iniziali=args.pesi_iniziali,
     )
     raise SystemExit(codice)
 

@@ -19,6 +19,7 @@ from typing import Any
 
 import yaml
 
+from mondo import dati_mondo as dm
 from mondo.domande import genera_domande
 from mondo.generatore import _lunghezza_storia
 from mondo.grafo import evento_a_grafo
@@ -77,13 +78,30 @@ def _n_tick(stadio: int, seed: int, config: dict) -> int:
     return _lunghezza_storia(seed)
 
 
+def _cast_persone(config: dict) -> tuple[dm.Persona, ...] | None:
+    """Cast ridotto opzionale (`dataset.cast` nel config, elenco di id
+    persona): sottoinsieme esplicito di `dm.PERSONE`, con lo stesso ordine.
+    Assente -> `None` (cast pieno, comportamento invariato)."""
+    id_cast = config["dataset"].get("cast")
+    if id_cast is None:
+        return None
+    id_richiesti = set(id_cast)
+    persone = tuple(p for p in dm.PERSONE if p.id in id_richiesti)
+    mancanti = id_richiesti - {p.id for p in persone}
+    if mancanti:
+        raise ValueError(f"dataset.cast contiene id sconosciuti: {sorted(mancanti)}")
+    return persone
+
+
 def genera_record(stadio: int, seed: int, config: dict) -> dict:
     """Genera il record JSONL per una storia (in memoria, non scrive nulla)."""
     tipi_ammessi = set(_config_stadio(stadio, config)["tipi"])
     n_per_tipo = config["dataset"]["n_per_tipo"]
     ctx = config["dataset"]["ctx"]
 
-    storia = genera_storia(seed=seed, n_tick=_n_tick(stadio, seed, config))
+    storia = genera_storia(
+        seed=seed, n_tick=_n_tick(stadio, seed, config), persone=_cast_persone(config),
+    )
     token_eventi = [grafo_a_token(evento_a_grafo(e)) for e in storia.eventi]
     storia_flat = [t for tok in token_eventi for t in tok]
 
