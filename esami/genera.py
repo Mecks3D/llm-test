@@ -74,8 +74,18 @@ def _verifica_seed(seed: int, split: str) -> None:
 
 
 def _n_tick(stadio: int, seed: int, config: dict) -> int:
-    if _config_stadio(stadio, config)["storie_corte"]:
-        return random.Random(f"stadio{stadio}-{seed}").randint(3, 6)
+    """Lunghezza della storia in tick. `storie_corte` di uno stadio può
+    essere `True` (range normativo 3-6, comportamento di sempre, byte
+    identico) o un dizionario `{"min": ..., "max": ...}` per un curriculum
+    con storie ancora più corte (es. il curriculum a cast crescente,
+    `configs/v1_grad*.yaml`)."""
+    storie_corte = _config_stadio(stadio, config)["storie_corte"]
+    if storie_corte:
+        if isinstance(storie_corte, dict):
+            minimo, massimo = storie_corte["min"], storie_corte["max"]
+        else:
+            minimo, massimo = 3, 6
+        return random.Random(f"stadio{stadio}-{seed}").randint(minimo, massimo)
     return _lunghezza_storia(seed)
 
 

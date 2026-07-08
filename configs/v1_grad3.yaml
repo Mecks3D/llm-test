@@ -1,0 +1,54 @@
+# Curriculum a cast crescente, gradino 3/3: 3 personaggi (anna, piero,
+# maria) — stesso cast di v1_facile.yaml, ma qui si arriva gradualmente
+# invece che in un salto secco da cast pieno. Riparte dal checkpoint
+# best-dev del gradino 2:
+#   python -m cervello.addestra --config configs/v1_grad3.yaml \
+#       --pesi-iniziali dati/risultati/v1_grad2/stadio1_best.pt
+#
+# Run separata: non tocca dati/grad2 né i checkpoint del gradino 2.
+# Dopo questo gradino: confrontare l'esame con quello di v1_facile.yaml
+# (0,7448) per vedere se la gradualità ha aiutato a parità di personaggi.
+
+nome_run: v1_grad3
+device: auto
+seed_torch: 1337
+
+percorsi:
+  lessico: lingua/lessico.tsv
+  vocabolario: cervello/vocabolario.json
+  dati_dir: dati/grad3
+  risultati_dir: dati/risultati
+
+dataset:
+  ctx: 3072
+  train_storie: 3000
+  dev_storie: 200
+  esame_storie: 200
+  n_per_tipo: 8
+  cast: [anna, piero, maria]
+
+stadi:
+  1:
+    tipi: [posizione]
+    soglia: 0.95
+    storie_corte: {min: 1, max: 3}
+
+modello:
+  n_layer: 8
+  n_head: 8
+  d_model: 256
+  d_ff: 1024
+  dropout: 0.1
+
+training:
+  batch: 4
+  accumulo: 8
+  lr: 3.0e-4
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  warmup_step: 50
+  grad_clip: 1.0
+  max_step: 4000
+  intervallo_valutazione: 400
+  dev_campione: 200

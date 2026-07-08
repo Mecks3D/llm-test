@@ -110,6 +110,20 @@ class TestStadio1StorieCorteSolaPosizione:
             for esempio in record["esempi"]:
                 assert esempio["tipo"] == "posizione"
 
+    def test_storie_corte_dict_min_max_personalizzato(self, tmp_path):
+        config = _config_piccolo(tmp_path)
+        config["stadi"][1]["storie_corte"] = {"min": 1, "max": 3}
+        for seed in range(30):
+            n = _n_tick(1, seed, config)
+            assert 1 <= n <= 3
+
+    def test_storie_corte_true_resta_3_6_byte_identico(self, tmp_path):
+        config_bool = _config_piccolo(tmp_path)
+        config_dict = _config_piccolo(tmp_path)
+        config_dict["stadi"][1]["storie_corte"] = {"min": 3, "max": 6}
+        for seed in range(30):
+            assert _n_tick(1, seed, config_bool) == _n_tick(1, seed, config_dict)
+
 
 class TestCastPersone:
     def test_assente_ritorna_none(self, tmp_path):
