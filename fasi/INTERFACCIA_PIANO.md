@@ -1,5 +1,30 @@
 # PIANO ESECUTIVO — Interfaccia grafica dimostrativa (visualizza il sistema end-to-end)
 
+## Stato di avanzamento (aggiornato 2026-07-08)
+
+- **Implementata, testata, verificata funzionante.** Le 2 decisioni aperte
+  del §7 sono state confermate come da raccomandazione del piano: seed
+  d'esame rifiutati di default (flag `--permetti-seed-esame`), tkinter
+  (non web app). I punti 3 (domande "a mano") e 4 (stadi diversi da 1) non
+  sono stati implementati: non bloccavano la prima versione, come previsto.
+- `interfaccia/ponte.py` (collante, nessuna logica nuova) +
+  `interfaccia/app.py` (finestra tkinter, `python -m interfaccia.app`).
+  18 test in `tests/test_interfaccia.py` (472 test verdi in totale nel
+  repo). Nessun test automatico di `app.py`/tkinter: verifica end-to-end
+  fatta pilotando `App` direttamente (nessuno strumento di automazione
+  input disponibile sulla macchina) con il checkpoint
+  `/home/andrea/Scaricati/v1_facile/stadio1.pt` + `configs/v1_facile.yaml`
+  — caricamento, generazione storia, domande candidate, risposta del
+  modello, confronto grafo vs grafo, token grezzi: tutto verificato,
+  nessun bug trovato. Screenshot presi con `xfce4-screenshooter` (uniche
+  altre opzioni testate e assenti: imagemagick/scrot/xdotool).
+- Icona da desktop creata su richiesta di Andrea:
+  `~/Scrivania/cervello-bambino-interfaccia.desktop`.
+- Dettagli completi in memoria (progetto-cervello-bambino.md, voce
+  "Interfaccia implementata e verificata funzionante").
+
+---
+
 Documento scritto per essere eseguito in una conversazione pulita da un
 modello meno capace, come `FASE1_PIANO.md`/`FASE2_PIANO.md`. Non è
 normativo per il curriculum (non tocca esami/soglie/dataset): è un
