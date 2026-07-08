@@ -183,19 +183,24 @@ def _componi_e_valida(
     return {"tipo": tipo, "domanda": tok_domanda, "risposta": tok_risposta}
 
 
-def genera_record(stadio: int, seed: int, config: dict, *, split: str = "train") -> dict:
+def genera_record(
+    stadio: int, seed: int, config: dict, *, split: str = "train",
+    troncamento: int | None = None,
+) -> dict:
     """Genera il record JSONL per una storia (in memoria, non scrive nulla).
 
-    La chiave opzionale `dataset.anti_scorciatoia` (piano
-    fasi/FASE2_PIANO_ANTISCORCIATOIA.md §2/§4) si applica SOLO quando
-    `split == "train"`; senza di essa (o per dev/esame) il comportamento è
-    quello di sempre, byte per byte."""
+    `troncamento`, se dato, ferma la storia al tick k invece della lunghezza
+    piena (solo per il train, piano fasi/FASE2_PIANO_ANTISCORCIATOIA.md §3):
+    il record porta in più il campo `"troncamento": k`. Le chiavi opzionali
+    `dataset.anti_scorciatoia` e `dataset.troncamenti` (piano §2/§3/§4) si
+    applicano SOLO quando `split == "train"`; senza di esse (o per dev/esame)
+    il comportamento è quello di sempre, byte per byte."""
     tipi_ammessi = set(_config_stadio(stadio, config)["tipi"])
     ds = config["dataset"]
     n_per_tipo = ds["n_per_tipo"]
     ctx = ds["ctx"]
 
-    n_tick = _n_tick(stadio, seed, config)
+    n_tick = troncamento if troncamento is not None else _n_tick(stadio, seed, config)
     storia = genera_storia(seed=seed, n_tick=n_tick, persone=_cast_persone(config))
     token_eventi = [grafo_a_token(evento_a_grafo(e)) for e in storia.eventi]
     storia_flat = [t for tok in token_eventi for t in tok]
@@ -203,7 +208,8 @@ def genera_record(stadio: int, seed: int, config: dict, *, split: str = "train")
     anti_cfg = ds.get("anti_scorciatoia") if split == "train" else None
     n_candidate = anti_cfg.get("candidate_per_tipo", 999) if anti_cfg else n_per_tipo
 
-    rng_domande = random.Random(f"domande-{seed}")
+    seme_domande = f"domande-{seed}" if troncamento is None else f"domande-{seed}-t{troncamento}"
+    rng_domande = random.Random(seme_domande)
     candidate = genera_domande(storia, rng_domande, n_per_tipo=n_candidate)
 
     esempi: list[dict] = []
@@ -228,7 +234,22 @@ def genera_record(stadio: int, seed: int, config: dict, *, split: str = "train")
             esempio["difficolta"] = difficolta
             esempi.append(esempio)
 
-    return {"stadio": stadio, "seed": seed, "storia": storia_flat, "esempi": esempi}
+    record = {"stadio": stadio, "seed": seed, "storia": storia_flat, "esempi": esempi}
+    if troncamento is not None:
+        record["troncamento"] = troncamento
+    return record
+
+
+def _record_per_seed(stadio: int, seed: int, config: dict, split: str) -> list[dict]:
+    """Tutti i record di un seed: il record pieno e, se `dataset.troncamenti`
+    è attivo (solo train, piano §3), un record aggiuntivo per ogni tick
+    intermedio k in [3, n_tick_pieno)."""
+    record = [genera_record(stadio, seed, config, split=split)]
+    if split == "train" and config["dataset"].get("troncamenti", False):
+        n_tick_pieno = _n_tick(stadio, seed, config)
+        for k in range(3, n_tick_pieno):
+            record.append(genera_record(stadio, seed, config, split=split, troncamento=k))
+    return record
 
 
 def genera_dataset(stadio: int, split: str, config: dict) -> list[dict]:
@@ -237,7 +258,7 @@ def genera_dataset(stadio: int, split: str, config: dict) -> list[dict]:
     record = []
     for seed in finestra_seed(stadio, split, config):
         _verifica_seed(seed, split)
-        record.append(genera_record(stadio, seed, config, split=split))
+        record.extend(_record_per_seed(stadio, seed, config, split))
     return record
 
 

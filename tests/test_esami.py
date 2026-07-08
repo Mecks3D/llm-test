@@ -186,7 +186,7 @@ from mondo.domande import Domanda
 from mondo.grafo import NON_LO_SO, grafo_fatto
 from mondo.simulatore import Storia
 from mondo.tipi import Evento, StatoMondo
-from esami.genera import _classifica_domanda_posizione, _seleziona_posizione
+from esami.genera import _classifica_domanda_posizione, _record_per_seed, _seleziona_posizione
 
 
 def _stato_con_persone(*id_persone: str) -> StatoMondo:
@@ -299,11 +299,91 @@ class TestSelezioneAntiScorciatoia:
         config_anti = _config_piccolo(
             tmp_path / "anti",
             anti_scorciatoia={"quota_difficili": 0.6, "candidate_per_tipo": 999},
+            troncamenti=True,
         )
         for split in ("dev", "esame"):
             record_base = genera_dataset(1, split, config_base)
             record_anti = genera_dataset(1, split, config_anti)
             assert record_base == record_anti
+
+
+class TestStorieTroncate:
+    def test_solo_record_pieno_senza_troncamenti(self, tmp_path):
+        config = _config_piccolo(tmp_path)
+        for seed in range(5):
+            assert len(_record_per_seed(1, seed, config, "train")) == 1
+
+    def test_conta_i_record_attesi(self, tmp_path):
+        config = _config_piccolo(tmp_path, troncamenti=True)
+        for seed in range(20):
+            n_tick_pieno = _n_tick(1, seed, config)
+            record = _record_per_seed(1, seed, config, "train")
+            assert len(record) == max(1, n_tick_pieno - 3 + 1)
+            attesi = {None} | set(range(3, n_tick_pieno))
+            assert {r.get("troncamento") for r in record} == attesi
+
+    def test_eventi_troncati_sono_il_prefisso_esatto(self, tmp_path):
+        # round-trip prefisso già verificato nel piano su 180/180 semi: qui
+        # si controlla che il campo "storia" (token-evento) della versione
+        # troncata sia esattamente il prefisso di quella piena.
+        config = _config_piccolo(tmp_path, troncamenti=True)
+        for seed in range(10):
+            record = _record_per_seed(1, seed, config, "train")
+            pieno = next(r for r in record if r.get("troncamento") is None)
+            for r in record:
+                if r.get("troncamento") is None:
+                    continue
+                assert pieno["storia"][: len(r["storia"])] == r["storia"]
+
+    def test_dev_ed_esame_ignorano_troncamenti(self, tmp_path):
+        config_base = _config_piccolo(tmp_path / "base")
+        config_tr = _config_piccolo(tmp_path / "tr", troncamenti=True)
+        for split in ("dev", "esame"):
+            assert genera_dataset(1, split, config_base) == genera_dataset(1, split, config_tr)
+
+    def test_oro_puo_cambiare_tra_troncamenti(self, tmp_path):
+        # cerca programmaticamente un seed dove la stessa entita ha oro
+        # diverso in due troncamenti diversi (piano §6.4d).
+        config = _config_piccolo(tmp_path, troncamenti=True)
+        trovato = False
+        for seed in range(200):
+            record = _record_per_seed(1, seed, config, "train")
+            per_troncamento: dict[int, dict[str, str | None]] = {}
+            for r in record:
+                k = r.get("troncamento", -1)
+                oro_per_entita: dict[str, str | None] = {}
+                for esempio in r["esempi"]:
+                    bersaglio = _lemma_bersaglio(esempio["domanda"])
+                    oro_per_entita[bersaglio] = _lemma_oro(esempio["risposta"])
+                per_troncamento[k] = oro_per_entita
+            entita_comuni = set.intersection(*(set(d) for d in per_troncamento.values())) if per_troncamento else set()
+            for entita in entita_comuni:
+                valori = {d[entita] for d in per_troncamento.values() if entita in d}
+                if len(valori) > 1:
+                    trovato = True
+                    break
+            if trovato:
+                break
+        assert trovato, "nessun seed nei primi 200 mostra un oro che cambia tra troncamenti"
+
+
+def _entita_dopo(token: list[str], relazione: str) -> tuple[str, ...]:
+    """Estrae lo span di lemmi (1 o 2, per le istanze lemma+ordinale) tra la
+    relazione data e la parentesi chiusa che la segue."""
+    idx = token.index(relazione)
+    fine = token.index(")", idx)
+    return tuple(token[idx + 1 : fine])
+
+
+def _lemma_bersaglio(tok_domanda: list[str]) -> tuple[str, ...]:
+    # domanda = ( trovarsi ( nsubj BERSAGLIO ) ( quesito dove ) )
+    return _entita_dopo(tok_domanda, "nsubj")
+
+
+def _lemma_oro(tok_risposta: list[str]) -> tuple[str, ...] | None:
+    if tok_risposta[:2] == ["(", "non-lo-so"]:
+        return None
+    return _entita_dopo(tok_risposta, "obl:luogo")
 
 
 # ---------------------------------------------------------------------------
