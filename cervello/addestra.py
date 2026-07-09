@@ -224,8 +224,11 @@ def addestra_stadio(
     percorso_best: Path | None = None,
 ) -> dict[str, Any]:
     """Allena finché l'esattezza dev supera soglia+0.01 per 2 valutazioni
-    consecutive, o si raggiunge max_step. Logga ogni `intervallo_valutazione`
-    step (loss train/dev, esattezza dev, token/sec) su `percorso_log`.
+    consecutive, o si raggiunge max_step (a meno di `training.early_stop:
+    false` nel config, che disattiva il primo criterio e forza sempre
+    max_step — default assente/`true` = comportamento di sempre, byte
+    identico). Logga ogni `intervallo_valutazione` step (loss train/dev,
+    esattezza dev, token/sec) su `percorso_log`.
     Se `percorso_parziale` è dato, a ogni valutazione salva lì il checkpoint
     intra-stadio; con `ripresa` (da `carica_parziale`) riparte da dentro lo
     stadio invece che da step 0. Se `percorso_best` è dato, ad ogni
@@ -235,6 +238,7 @@ def addestra_stadio(
     t = config["training"]
     soglia = config["stadi"][stadio]["soglia"]
     max_step, intervallo = t["max_step"], t["intervallo_valutazione"]
+    early_stop = t.get("early_stop", True)
 
     step = 0
     epoca = 0
@@ -309,7 +313,7 @@ def addestra_stadio(
                     passaggi_consecutivi += 1
                 else:
                     passaggi_consecutivi = 0
-                if passaggi_consecutivi >= 2:
+                if early_stop and passaggi_consecutivi >= 2:
                     return {"step_finale": step, **ultima_valutazione}
 
                 if percorso_parziale is not None:

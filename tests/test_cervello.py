@@ -927,3 +927,98 @@ class TestCheckpointIntraStadio:
         with open(dir_risultati / "log.jsonl", encoding="utf-8") as f:
             steps = [json.loads(r)["step"] for r in f]
         assert steps == [2, 4], steps
+
+
+@pytest.mark.torch
+class TestEarlyStop:
+    """`training.early_stop: false` disattiva l'arresto anticipato a
+    soglia+0.01 per 2 valutazioni consecutive: il training arriva sempre a
+    max_step. Assente (o `true`) -> comportamento di sempre, byte identico
+    (richiesta di Andrea: rivedere il gradino 1 del curriculum a cast
+    crescente senza fermarsi appena supera la soglia)."""
+
+    def _config(self, tmp_path, *, early_stop=None):
+        training = {
+            "batch": 1, "accumulo": 1, "lr": 3.0e-4, "beta1": 0.9,
+            "beta2": 0.95, "weight_decay": 0.1, "warmup_step": 1,
+            "grad_clip": 1.0, "max_step": 4, "intervallo_valutazione": 1,
+            "dev_campione": 1,
+        }
+        if early_stop is not None:
+            training["early_stop"] = early_stop
+        return {
+            "nome_run": "run_test",
+            "device": "cpu",
+            "seed_torch": 0,
+            "percorsi": {
+                "dati_dir": str(tmp_path / "dati"),
+                "risultati_dir": str(tmp_path / "risultati"),
+            },
+            # soglia molto bassa: soglia+0.01 è sempre superata da
+            # un'esattezza_dev pilotata >= 0, per un test deterministico
+            # che non dipende da quanto il modello impara davvero.
+            "dataset": {"ctx": 1024, "train_storie": 2, "dev_storie": 1,
+                        "esame_storie": 1, "n_per_tipo": 1},
+            "stadi": {1: {"tipi": ["posizione"], "soglia": -1.0, "storie_corte": True}},
+            "modello": {"n_layer": 1, "n_head": 2, "d_model": 8, "d_ff": 16,
+                        "dropout": 0.0},
+            "training": training,
+        }
+
+    def _prepara(self, tmp_path, config):
+        import json
+        from cervello.addestra import crea_ottimizzatore
+        from cervello.dati import carica_esempi
+        from cervello.modello import ConfigModello, Modello
+        from esami.genera import percorso_dataset, scrivi_dataset
+        for split in ("train", "dev", "esame"):
+            scrivi_dataset(1, split, config)
+        vocab = carica_vocabolario()
+        torch.manual_seed(0)
+        cfg = ConfigModello(vocab_size=vocab.dimensione, ctx=1024, **config["modello"])
+        modello = Modello(cfg)
+        ottimizzatore = crea_ottimizzatore(modello, config)
+        esempi = carica_esempi(percorso_dataset(1, "train", config))
+        with open(percorso_dataset(1, "dev", config), encoding="utf-8") as f:
+            dev_record = [json.loads(r) for r in f]
+        return modello, ottimizzatore, vocab, esempi, dev_record
+
+    def test_assente_si_ferma_appena_supera_soglia(self, tmp_path, monkeypatch):
+        import json
+        import cervello.addestra as addestra_mod
+        from cervello.addestra import addestra_stadio
+
+        config = self._config(tmp_path)
+        modello, ottimizzatore, vocab, esempi, dev_record = self._prepara(tmp_path, config)
+        monkeypatch.setattr(
+            addestra_mod, "_valuta_dev",
+            lambda *a, **k: {"loss_dev": 0.0, "esattezza_dev": 0.5},
+        )
+
+        esito = addestra_stadio(
+            modello, ottimizzatore, config, 1, esempi, dev_record, vocab, "cpu",
+            tmp_path / "log.jsonl", 0,
+        )
+        assert esito["step_finale"] == 2  # 2 valutazioni consecutive sopra soglia+0.01 -> stop
+
+    def test_false_arriva_sempre_a_max_step(self, tmp_path, monkeypatch):
+        import json
+        import cervello.addestra as addestra_mod
+        from cervello.addestra import addestra_stadio
+
+        config = self._config(tmp_path, early_stop=False)
+        modello, ottimizzatore, vocab, esempi, dev_record = self._prepara(tmp_path, config)
+        monkeypatch.setattr(
+            addestra_mod, "_valuta_dev",
+            lambda *a, **k: {"loss_dev": 0.0, "esattezza_dev": 0.5},
+        )
+
+        esito = addestra_stadio(
+            modello, ottimizzatore, config, 1, esempi, dev_record, vocab, "cpu",
+            tmp_path / "log.jsonl", 0,
+        )
+        assert esito["step_finale"] == config["training"]["max_step"]
+
+        with open(tmp_path / "log.jsonl", encoding="utf-8") as f:
+            righe = [json.loads(r) for r in f]
+        assert [r["step"] for r in righe] == [1, 2, 3, 4]

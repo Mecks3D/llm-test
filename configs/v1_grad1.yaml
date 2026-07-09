@@ -51,6 +51,8 @@ training:
   weight_decay: 0.1
   warmup_step: 50
   grad_clip: 1.0
+  early_stop: false  # su richiesta di Andrea: arriva sempre a max_step,
+                      # non si ferma appena esattezza_dev supera soglia+0.01
   max_step: 1500
   intervallo_valutazione: 200
   dev_campione: 200
