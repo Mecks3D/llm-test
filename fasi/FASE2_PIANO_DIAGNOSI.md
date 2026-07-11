@@ -348,3 +348,30 @@ Andrea.
   l'interferenza tra entità, rafforza B/C2; fallisce → il tracking temporale
   in sé non si forma, rafforza A2/C1). **A2 resta in coda per scelta
   esplicita di Andrea** (non si lancia in parallelo per ora).
+
+- **2026-07-12: esperimento "tempo" CONCLUSO, esito RIESCE — cambia la
+  priorità rispetto alla lettura A1+A3 di cui sopra.** Dettagli completi in
+  `fasi/FASE2_PIANO_TEMPO.md` §8. In sintesi: `posizione_tempo` 0,871 (quasi
+  alla soglia "~0,9" dell'albero §7 di quel piano); split diagnostico
+  `tracking_tempo` (baseline euristiche 0,0000 per costruzione — casi dove
+  frequenza/recency/stato-finale non possono funzionare) a **0,6463** — il
+  modello traccia lo stato di una singola entità nel tempo ben oltre il
+  caso, quando gli si toglie ogni possibilità di scorciatoia. `azione_tempo`
+  (0,318) e `azione_luogo` (0,316) restano deboli, ma probabilmente per
+  target di generazione più complesso (verbo + più argomenti) più che per
+  mancato tracking — nota aperta, approfondimento rimandato su richiesta di
+  Andrea.
+
+  **Conseguenza per l'albero di §6**: a 1 sola entità il tracking SI forma
+  (diversamente da quanto suggerirebbe A1 da solo, che non aveva trovato head
+  di binding dedicate — ma A1 girava su checkpoint multi-entità, dove il
+  segnale può essere schiacciato dall'interferenza). Questo sposta il peso
+  da "nessun head → priorità A2b (più step/capacità)" verso **"il muro è
+  interferenza tra entità → priorità B (stato denso in-sequenza) e C2
+  (memoria per entità)"**, la lettura opposta a quella isolata di A1+A3.
+  **A2 (ablation capacità/budget) perde priorità**: il tracking di base non
+  sembra un problema di capacità/step, dato che con budget analogo (8.000
+  step) e un solo personaggio il modello ci riesce bene. **Prossimo passo:
+  da decidere con Andrea** — probabilmente conviene progettare direttamente
+  Fase B (supervisione densa dello stato) piuttosto che spendere il run A2,
+  ma è una decisione di design sua, non ancora presa.

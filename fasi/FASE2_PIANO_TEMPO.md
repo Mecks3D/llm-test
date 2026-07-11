@@ -393,3 +393,73 @@ vi compare come linea parallela) e lo «Stato di avanzamento» qui sotto.
   composizione per tipo sensata (tabella sopra, scala ridotta), esattezza_dev
   sopra zero. Poi il run vero (12b) SOLO dopo l'ok esplicito di Andrea al
   fumo.
+
+- **2026-07-11/12: T5-T6 eseguiti su Colab, esperimento CONCLUSO (letto).**
+  Push `ee2d0ab`. Due bug trovati e fissati sul notebook durante l'esecuzione
+  (non nel codice di produzione): cella 74 (fumo) e cella 80 (run vero)
+  chiamavano `stampa_composizione` generica (v1_anti, sezione 10) invece di
+  `stampa_composizione_tempo` — `NameError` in produzione sulla 80, sfuggito
+  alla self-review perché il fix era stato applicato solo alla cella 74.
+  Fix commit `5900d8e` + `16e7dd2` (cella 80 ora autosufficiente, ridefinisce
+  la funzione invece di dipendere dall'aver eseguito prima la 74).
+
+  **Fumo (`v1_tempo_fumo`, 300 storie/300 step) — PASS**: pipeline verde su
+  6504 esempi, composizione identica in proporzione a T4. `esattezza_dev`
+  0,0 ai 3 checkpoint e 2/6504 all'esame finale — atteso a questo stadio
+  (stesso pattern del primissimo fumo di `v1_fumo`, non un blocco).
+  Malformata 93% (6058/6504, più alto del 59% di `v1_fumo`): letto come
+  atteso, non un bug — i grafi-oro qui hanno DUE argomenti obliqui
+  (luogo+tempo) invece di uno, struttura più lunga da chiudere bene a soli
+  300 step; campioni mostrano babbling classico (token ripetuti, stessa
+  risposta generica per domande diverse). Andrea ha dato l'ok esplicito.
+
+  **Run vero (`v1_tempo`, 3.000 storie, 8.000 step, da pesi casuali)**:
+  curva sana fino in fondo, `esattezza_dev` sale monotona fino all'ultimo
+  step loggato (0,005→0,66 a step 500→8000, mai un picco-e-discesa come nel
+  vecchio `v1`) → il checkpoint best-dev e l'ultimo coincidono (diagnosi
+  identiche su `stadio1.pt` e `stadio1_best.pt`, non un bug). `loss_dev`
+  scende fino a 0,079, nessun segno di overfitting.
+
+  Esame ufficiale (n=4340): esattezza totale **0,6274** (sotto soglia 0,95
+  del curriculum, ma qui non è il criterio — esperimento esplorativo).
+  **Malformata: 0%** (era 93% nel fumo) — grammatica imparata
+  perfettamente, tutti gli errori residui sono di contenuto.
+  `esattezza_per_tipo`: `posizione` 0,764; **`posizione_tempo` 0,871**;
+  `azione_tempo` 0,318; `azione_luogo` 0,316 (n=114, piccolo).
+
+  Split diagnostico `tracking_tempo.jsonl` (137 storie, 328 esempi — per
+  costruzione esclude i casi risolvibili con scorciatoie di
+  frequenza/recency/stato-finale, quindi le baseline euristiche sono
+  0,0000 *per costruzione*, non per debolezza del confronto): il modello
+  prende **0,6463** — segnale pulito, quando le scorciatoie sono escluse
+  matematicamente il modello risponde giusto quasi 2 volte su 3.
+
+  **Verdetto per l'albero di §7**: combacia con la prima riga (`posizione_tempo`
+  vicinissimo alla soglia "~0,9"; `tracking_tempo` ben sopra le baseline) →
+  **il tracking mono-entità si forma; il muro multi-entità osservato nella
+  roadmap principale (A2/B/C) è interferenza/binding, non assenza della
+  capacità di base.** Rafforza Fase B (stato denso) e C2 (slot entità) come
+  prossime leve; indebolisce la priorità di A2.
+
+  **Nota aperta, non conclusiva, DISCUSSIONE RIMANDATA su richiesta di
+  Andrea**: `azione_tempo`/`azione_luogo` molto più deboli di
+  `posizione_tempo` pur richiedendo lo stesso tracking di stato. Campioni
+  d'errore mostrano spesso verbo sbagliato o `obl:origine`=`obl:luogo`
+  duplicato (es. genera "andare... origine giardino... luogo giardino"
+  invece di "giocare... luogo giardino") — sembra più un problema di
+  target di generazione più complesso (verbo + più argomenti, non un solo
+  luogo) che di mancato tracking, ma non è verificabile con l'analisi
+  attuale: `esami/diagnosi.py` calcola le baseline euristiche solo per il
+  tipo `posizione`, non per gli altri tre tipi nuovi. Da riprendere in una
+  prossima conversazione se Andrea vuole approfondire.
+
+  **Dati scaricati in locale da Andrea**: `/home/andrea/Scaricati/v1_tempo/`
+  contiene `esame_stadio1.json`, `log.jsonl`, `stadio1.pt`, `stadio1_best.pt`
+  (non ancora i JSON di `diagnosi_stadio1*` — restano su Drive
+  `checkpoint/v1_tempo/` se servono).
+
+  **Stato: esperimento CONCLUSO.** Prossimo passo: nessuno immediato su
+  questa linea: Andrea deciderà se/come approfondire `azione_tempo` in una
+  prossima conversazione; nel frattempo la roadmap principale (A2/B/C in
+  `FASE2_PIANO_DIAGNOSI.md`) può ripartire tenendo conto di questo
+  risultato (§7 di quel piano aggiornato di conseguenza).
