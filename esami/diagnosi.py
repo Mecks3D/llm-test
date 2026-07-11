@@ -30,7 +30,7 @@ from cervello.sequenza import token_a_grafo
 from cervello.vocabolario import carica_vocabolario
 
 from .esamina import CATEGORIE, _carica_modello, dispositivo, valuta_esempio
-from .genera import PROJECT_ROOT, _cast_persone, _n_tick, carica_config, percorso_dataset
+from .genera import PROJECT_ROOT, _cast_persone, _n_tick, carica_config, percorso_dataset, percorso_esame_tracking
 
 BUCKET_DISTANZA = ("0", "1-2", "3-5", ">=6")
 
@@ -222,7 +222,7 @@ def _cli() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--stadio", type=int, required=True)
     ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--split", choices=("train", "dev", "esame"), default="esame")
+    ap.add_argument("--split", choices=("train", "dev", "esame", "tracking"), default="esame")
     ap.add_argument("--max-esempi", type=int, default=None)
     args = ap.parse_args()
 
@@ -231,7 +231,11 @@ def _cli() -> None:
     vocab = carica_vocabolario()
     modello = _carica_modello(config, args.checkpoint, device)
 
-    record = _carica_record(percorso_dataset(args.stadio, args.split, config))
+    percorso_in = (
+        percorso_esame_tracking(args.stadio, config) if args.split == "tracking"
+        else percorso_dataset(args.stadio, args.split, config)
+    )
+    record = _carica_record(percorso_in)
     esito = esegui_diagnosi(
         modello, vocab, record, config, args.stadio, config["dataset"]["ctx"], device,
         max_esempi=args.max_esempi,
@@ -239,7 +243,10 @@ def _cli() -> None:
 
     dir_risultati = PROJECT_ROOT / config["percorsi"]["risultati_dir"] / config["nome_run"]
     dir_risultati.mkdir(parents=True, exist_ok=True)
-    percorso_out = dir_risultati / f"diagnosi_stadio{args.stadio}.json"
+    # split "esame" (il default di sempre) mantiene il nome storico;
+    # gli altri (incluso "tracking", A3) si affiancano con un nome distinto.
+    suffisso = "" if args.split == "esame" else f"_{args.split}"
+    percorso_out = dir_risultati / f"diagnosi_stadio{args.stadio}{suffisso}.json"
     with open(percorso_out, "w", encoding="utf-8") as f:
         json.dump(esito, f, ensure_ascii=False, indent=2)
 

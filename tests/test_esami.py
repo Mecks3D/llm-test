@@ -200,7 +200,15 @@ from mondo.domande import Domanda
 from mondo.grafo import NON_LO_SO, grafo_fatto
 from mondo.simulatore import Storia
 from mondo.tipi import Evento, StatoMondo
-from esami.genera import _classifica_domanda_posizione, _record_per_seed, _seleziona_posizione
+from esami.genera import (
+    _classifica_domanda_posizione,
+    _record_per_seed,
+    _seleziona_posizione,
+    _tracking_puro,
+    genera_esame_tracking,
+    percorso_esame_tracking,
+    scrivi_esame_tracking,
+)
 
 
 def _stato_con_persone(*id_persone: str) -> StatoMondo:
@@ -282,6 +290,82 @@ class TestClassificazioneDifficolta:
         # l'ultima menzione VALIDA resta t=1 (prendere), non t=3 (cercare):
         # stessa distanza_coda e stesso esito di test_d3 sopra.
         assert _classifica_domanda_posizione(storia, domanda) == "difficile"
+
+
+# ---------------------------------------------------------------------------
+# Gruppo 9: A3, split "tracking puro" (fasi/FASE2_PIANO_DIAGNOSI.md §2)
+# ---------------------------------------------------------------------------
+
+class TestTrackingPuro:
+    def test_non_lo_so_falso(self):
+        storia = _storia_sintetica([Evento(t=1, azione="andare", agente="anna", luogo="cucina")])
+        domanda = _domanda_posizione("piero", None)
+        assert _tracking_puro(storia, domanda) is False
+
+    def test_solo_d1_vero_non_basta(self):
+        # stesso caso di test_d1_oro_diverso_dal_luogo_piu_frequente: D1 vero,
+        # ma D2 falso (distanza_coda=1) e D3 falso (oro == luogo dell'ultima
+        # menzione) -> non è tracking puro, serve la congiunzione.
+        eventi = [
+            Evento(t=1, azione="andare", agente="anna", luogo="cucina"),
+            Evento(t=2, azione="andare", agente="maria", luogo="cucina"),
+            Evento(t=3, azione="andare", agente="piero", luogo="giardino"),
+            Evento(t=4, azione="andare", agente="anna", luogo="cucina"),
+        ]
+        storia = _storia_sintetica(eventi)
+        domanda = _domanda_posizione("piero", "giardino")
+        assert _classifica_domanda_posizione(storia, domanda) == "difficile"  # almeno una vera
+        assert _tracking_puro(storia, domanda) is False  # non tutte e tre
+
+    def test_d1_e_d2_e_d3_tutte_vere(self):
+        eventi = [
+            Evento(t=1, azione="andare", agente="piero", luogo="giardino"),
+            Evento(t=2, azione="andare", agente="anna", luogo="cucina"),
+            Evento(t=3, azione="andare", agente="maria", luogo="cucina"),
+            Evento(t=4, azione="andare", agente="anna", luogo="cucina"),
+            Evento(t=5, azione="andare", agente="maria", luogo="cucina"),
+        ]
+        storia = _storia_sintetica(eventi)
+        # oro disgiunto sia dal luogo più frequente (cucina) sia dal luogo
+        # dell'ultima menzione di piero (giardino, t=1): D1, D2 (distanza=4),
+        # D3 tutte vere.
+        domanda = _domanda_posizione("piero", "orto")
+        assert _tracking_puro(storia, domanda) is True
+
+
+class TestEsameTracking:
+    def test_ogni_domanda_e_gia_nellesame_ufficiale(self, tmp_path):
+        config = _config_piccolo(tmp_path, esame_storie=30)
+        tracking = genera_esame_tracking(1, config)
+        assert tracking  # il campione di prova produce almeno una storia utile
+
+        esame = {r["seed"]: r for r in genera_dataset(1, "esame", config)}
+        for r in tracking:
+            assert r["seed"] in esame
+            assert r["storia"] == esame[r["seed"]]["storia"]
+            esempi_ufficiali = esame[r["seed"]]["esempi"]
+            for esempio in r["esempi"]:
+                assert esempio["tipo"] == "posizione"
+                assert esempio in esempi_ufficiali
+
+    def test_seed_solo_dalla_finestra_esame(self, tmp_path):
+        config = _config_piccolo(tmp_path, esame_storie=30)
+        finestra = set(finestra_seed(1, "esame", config))
+        for r in genera_esame_tracking(1, config):
+            assert r["seed"] in finestra
+
+    def test_tipo_non_ammesso_ritorna_vuoto(self, tmp_path):
+        config = _config_piccolo(tmp_path, esame_storie=10)
+        config["stadi"][1]["tipi"] = []
+        assert genera_esame_tracking(1, config) == []
+
+    def test_scrittura_deterministica(self, tmp_path):
+        config = _config_piccolo(tmp_path, esame_storie=30)
+        p1 = scrivi_esame_tracking(1, config)
+        contenuto1 = p1.read_bytes()
+        assert p1 == percorso_esame_tracking(1, config)
+        p2 = scrivi_esame_tracking(1, config)
+        assert p2.read_bytes() == contenuto1
 
 
 class TestSelezioneAntiScorciatoia:

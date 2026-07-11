@@ -111,13 +111,17 @@ def _lemma_per_relazione(grafo: Grafo, relazione: str) -> str:
     raise ValueError(f"nessun arco con relazione {relazione!r} nel grafo")
 
 
-def _classifica_domanda_posizione(storia: Storia, domanda: Domanda) -> str:
-    """difficile/facile/non-lo-so per una domanda "posizione", secondo la
-    selezione anti-scorciatoia (fasi/FASE2_PIANO_ANTISCORCIATOIA.md §2.1). Le
-    proprietà si calcolano sugli eventi della storia del record (quella
-    eventualmente troncata, se `troncamenti` è attivo — vedi §3)."""
+def _d1_d2_d3(storia: Storia, domanda: Domanda) -> tuple[bool, bool, bool] | None:
+    """Le tre proprietà anti-scorciatoia per una domanda "posizione"
+    (fasi/FASE2_PIANO_ANTISCORCIATOIA.md §2.1): D1 oro diverso dal luogo
+    più frequente della storia, D2 distanza dalla coda >= 3 eventi, D3 oro
+    diverso dal luogo dell'evento di ultima menzione. `None` se la
+    risposta è "non-lo-so" (l'oro non esiste, le proprietà non si
+    applicano). Le proprietà si calcolano sugli eventi della storia del
+    record (quella eventualmente troncata, se `troncamenti` è attivo —
+    vedi §3)."""
     if domanda.grafo_risposta == NON_LO_SO:
-        return "non-lo-so"
+        return None
 
     bersaglio = _lemma_per_relazione(domanda.grafo_domanda, "nsubj")
     oro = _lemma_per_relazione(domanda.grafo_risposta, "obl:luogo")
@@ -140,7 +144,27 @@ def _classifica_domanda_posizione(storia: Storia, domanda: Domanda) -> str:
     d1 = oro != piu_frequente
     d2 = distanza_coda >= 3
     d3 = oro != eventi[ultima_menzione].luogo
-    return "difficile" if (d1 or d2 or d3) else "facile"
+    return d1, d2, d3
+
+
+def _classifica_domanda_posizione(storia: Storia, domanda: Domanda) -> str:
+    """difficile/facile/non-lo-so per una domanda "posizione": "difficile"
+    se ALMENO UNA delle proprietà D1/D2/D3 vale (selezione anti-scorciatoia,
+    fasi/FASE2_PIANO_ANTISCORCIATOIA.md §2.1). Vedi `_tracking_puro` per la
+    congiunzione delle tre (fasi/FASE2_PIANO_DIAGNOSI.md, A3)."""
+    proprieta = _d1_d2_d3(storia, domanda)
+    if proprieta is None:
+        return "non-lo-so"
+    return "difficile" if any(proprieta) else "facile"
+
+
+def _tracking_puro(storia: Storia, domanda: Domanda) -> bool:
+    """Vero se TUTTE le euristiche scorciatoia sbagliano (D1 ∧ D2 ∧ D3,
+    fasi/FASE2_PIANO_DIAGNOSI.md §2, A3): il sotto-insieme dove ogni punto
+    guadagnato è binding vero, non fortuna. Falso per "non-lo-so" (l'oro
+    non esiste, le euristiche non si applicano)."""
+    proprieta = _d1_d2_d3(storia, domanda)
+    return proprieta is not None and all(proprieta)
 
 
 def _seleziona_posizione(
@@ -277,6 +301,60 @@ def percorso_dataset(stadio: int, split: str, config: dict) -> Path:
     return dati_dir / f"stadio{stadio}" / f"{split}.jsonl"
 
 
+def genera_esame_tracking(stadio: int, config: dict) -> list[dict]:
+    """Split d'esame aggiuntivo e permanente (fasi/FASE2_PIANO_DIAGNOSI.md,
+    A3): solo domande "posizione" dove TUTTE le euristiche scorciatoia
+    sbagliano (`_tracking_puro`, D1 ∧ D2 ∧ D3). Stessi seed e stesse
+    domande candidate dell'esame ufficiale (mai train, mai troncamenti):
+    ogni domanda qui è già presente in `esame.jsonl`, questo file la
+    AFFIANCA (vincolo permanente 2 di FASE2_PIANO_DIAGNOSI.md §1), non la
+    sostituisce. Storie senza nessuna domanda "tracking puro" sono escluse
+    dal risultato."""
+    tipi_ammessi = set(_config_stadio(stadio, config)["tipi"])
+    if "posizione" not in tipi_ammessi:
+        return []
+    ds = config["dataset"]
+    ctx = ds["ctx"]
+
+    record: list[dict] = []
+    for seed in finestra_seed(stadio, "esame", config):
+        _verifica_seed(seed, "esame")
+        n_tick = _n_tick(stadio, seed, config)
+        storia = genera_storia(seed=seed, n_tick=n_tick, persone=_cast_persone(config))
+        token_eventi = [grafo_a_token(evento_a_grafo(e)) for e in storia.eventi]
+
+        rng_domande = random.Random(f"domande-{seed}")
+        candidate = genera_domande(storia, rng_domande, n_per_tipo=ds["n_per_tipo"])
+
+        esempi = [
+            _componi_e_valida(
+                stadio, seed, d.tipo, token_eventi,
+                grafo_a_token(d.grafo_domanda), grafo_a_token(d.grafo_risposta), ctx,
+            )
+            for d in candidate if d.tipo == "posizione" and _tracking_puro(storia, d)
+        ]
+        if esempi:
+            storia_flat = [t for tok in token_eventi for t in tok]
+            record.append({"stadio": stadio, "seed": seed, "storia": storia_flat, "esempi": esempi})
+    return record
+
+
+def percorso_esame_tracking(stadio: int, config: dict) -> Path:
+    dati_dir = PROJECT_ROOT / config["percorsi"]["dati_dir"]
+    return dati_dir / f"stadio{stadio}" / "tracking.jsonl"
+
+
+def scrivi_esame_tracking(stadio: int, config: dict) -> Path:
+    record = genera_esame_tracking(stadio, config)
+    percorso = percorso_esame_tracking(stadio, config)
+    percorso.parent.mkdir(parents=True, exist_ok=True)
+    with open(percorso, "w", encoding="utf-8") as f:
+        for r in record:
+            f.write(json.dumps(r, ensure_ascii=False))
+            f.write("\n")
+    return percorso
+
+
 def scrivi_dataset(stadio: int, split: str, config: dict) -> Path:
     record = genera_dataset(stadio, split, config)
     percorso = percorso_dataset(stadio, split, config)
@@ -292,13 +370,18 @@ def _cli() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", default=str(_PERCORSO_CONFIG_DEFAULT))
     ap.add_argument("--stadio", type=int, required=True)
-    ap.add_argument("--split", choices=SPLIT_VALIDI, default=None)
+    ap.add_argument("--split", choices=(*SPLIT_VALIDI, "tracking"), default=None)
     args = ap.parse_args()
 
     config = carica_config(args.config)
+    # "tracking" (A3) va SOLO se richiesto esplicitamente: il default senza
+    # --split resta train+dev+esame, byte-identico a prima di A3.
     split_da_fare = [args.split] if args.split else list(SPLIT_VALIDI)
     for split in split_da_fare:
-        percorso = scrivi_dataset(args.stadio, split, config)
+        if split == "tracking":
+            percorso = scrivi_esame_tracking(args.stadio, config)
+        else:
+            percorso = scrivi_dataset(args.stadio, split, config)
         n = sum(1 for _ in open(percorso, encoding="utf-8"))
         print(f"stadio {args.stadio} {split}: {n} storie -> {percorso}")
 
