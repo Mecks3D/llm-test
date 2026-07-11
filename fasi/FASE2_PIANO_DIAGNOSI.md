@@ -283,3 +283,57 @@ Andrea.
   ancora iniziato. Prossimo passo: A1 (`esami/ispeziona.py`) + A3 (split
   tracking-puro), entrambi in locale; scaricare `v1_grad2/stadio1_best.pt`
   da Drive (serve sia per A1 sia per l'interfaccia).
+
+- **2026-07-11: A1 e A3 fatti, entrambi in locale (v1_grad2/stadio1_best.pt
+  era già in locale, non è servito scaricarlo di nuovo).**
+
+  **A1** (`esami/ispeziona.py`, commit 85f90c4, 17 test): l'attenzione si
+  ricalcola a mano (il kernel fuso di `modello.py` non restituisce i pesi),
+  verificato bit a bit contro il forward diretto. Due punteggi per head/layer
+  su 50 esempi "posizione" per checkpoint: (a) attenzione dal bersaglio nella
+  domanda verso le sue menzioni nella storia (tutte e sola ultima); (b)
+  induction classico (Olsson et al.: attenzione al token successivo alla
+  precedente occorrenza del token corrente). Girato su tutti i checkpoint già
+  in locale:
+
+  | Run (esame ufficiale) | T medio | max "ultima menzione" | vs uniforme | max induction |
+  |---|---|---|---|---|
+  | v1 (0,573) | 440 | 0,013 | ~5,7× | 0,021 |
+  | v1_facile (0,745) | 225 | 0,054 | ~12,1× | 0,032 |
+  | v1_anti (0,513) | 440 | 0,013 | ~5,7× | 0,009 |
+  | v1_grad2 (0,904) | 89 | 0,039 | ~3,5× | 0,033 |
+
+  **Nessun checkpoint ha sviluppato una head con firma forte di "stessa
+  entità"/induction** — nemmeno `v1_grad2`, il migliore comportamentalmente:
+  l'attenzione massima resta bassa in assoluto (1-5%) e solo modestamente
+  sopra il caso (mai vicina alla saturazione tipica di una vera induction
+  head). Punta verso l'ipotesi "sotto-training/capacità insufficiente" (§6:
+  "nessun head di binding → priorità A2b, più step").
+
+  **A3** (`esami/genera.py::genera_esame_tracking`/`_tracking_puro` +
+  `esami/diagnosi.py --split tracking`, commit f886579, 7 test nuovi):
+  nuovo file `tracking.jsonl` per run, sotto-insieme VERIFICATO di
+  `esame.jsonl` (stessi seed/domande candidate) con solo le domande dove
+  D1 ∧ D2 ∧ D3 sono TUTTE vere. Risultati (`diagnosi_stadio1_tracking.json`):
+
+  | Run | Esame ufficiale | Tracking puro (n) | baseline "ultimo evento storia" |
+  |---|---|---|---|
+  | v1 | 0,573 | 0,378 (n=82) | 0,305 |
+  | v1_facile | 0,745 | 0,440 (n=50) | 0,380 |
+  | v1_anti | 0,513 | 0,122 (n=82) | 0,305 |
+  | v1_grad2 | 0,904 | 0,467 (n=15) | 0,267 |
+
+  Su tracking puro l'esattezza crolla ovunque rispetto all'esame ufficiale
+  (v1_grad2: 0,904 → 0,467); `v1_anti` scende SOTTO la baseline banale
+  (0,122 < 0,305). Conferma quantitativa che l'esame ufficiale è in gran
+  parte scorciatoia: solo `v1_facile`/`v1_grad2` restano un poco sopra la
+  baseline "ultimo evento", un segnale di binding vero ma debole. Nota per
+  chi rilegge: `n` di `v1_grad2` è piccolo (15) perché con cast 2 e storie
+  1-3 tick ci sono strutturalmente pochi casi "difficili" — è anche questo
+  parte della spiegazione del suo 0,904 sull'esame ufficiale.
+
+  **Lettura combinata A1+A3, coerente con l'albero §6**: nessun meccanismo di
+  binding dedicato + crollo su tracking puro → priorità ad **A2** (ablation
+  capacità/budget su Colab). Prossimo passo: decidere con Andrea il braccio
+  (capacità d=384/12-layer, o budget 3× step) e ottenere il suo ok esplicito
+  prima del run (>2h per il braccio budget, vincolo 5).
