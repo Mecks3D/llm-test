@@ -29,9 +29,10 @@ from dataclasses import dataclass
 
 from . import dati_mondo as dm
 from . import parentela
-from .grafo import NON_LO_SO, Grafo, grafo_a_dict, grafo_fatto
+from .grafo import NON_LO_SO, Grafo, evento_a_grafo, grafo_a_dict, grafo_fatto
 from .numeri import lemma_numero
 from .simulatore import Storia
+from .tipi import Evento
 
 # Quota di "non lo so" richiesta per tipo (~15-20% indicato da FASE0.md,
 # punto 8). Non tutti i tipi hanno lo stesso margine: transfer/deduzione
@@ -342,4 +343,119 @@ def genera_domande(storia: Storia, rng: random.Random, n_per_tipo: int = 6) -> l
     domande: list[Domanda] = []
     for generatore in _GENERATORI:
         domande.extend(generatore(storia, rng, n_per_tipo))
+    return domande
+
+
+# ---------------------------------------------------------------------------
+# Esperimento "tempo" (fasi/FASE2_PIANO_TEMPO.md §2): un solo personaggio per
+# storia, domande condizionate nel tempo o nel luogo. Estensione additiva:
+# non tocca nulla di quanto sopra (genera_domande, _GENERATORI,
+# QUOTA_NON_LO_SO_PER_TIPO restano byte-identici, decisione 10 del piano).
+#
+# Nota epistemica (come per "parentela"): con cast 1 ogni tick da sveglio del
+# protagonista è narrato, quindi "posizione_tempo"/"azione_tempo" producono
+# non-lo-so solo nel raro caso di inizio-storia-nel-sonno, e "azione_luogo"
+# non lo produce mai per costruzione (vedi _genera_azione_luogo). Le domande
+# non-lo-so del mix v1_tempo arrivano dal tipo "posizione" esistente.
+# ---------------------------------------------------------------------------
+
+def _protagonista(storia: Storia) -> str:
+    persone = list(storia.stato_finale.persone.keys())
+    assert len(persone) == 1, f"genera_domande_tempo richiede un cast di una sola persona, trovate {len(persone)}"
+    return persone[0]
+
+
+def _posizione_al_tick(storia: Storia, pid: str, t: int) -> str | None:
+    """Luogo dell'ultimo evento di `pid` con `e.t <= t` (None solo a inizio
+    storia, prima di qualunque evento localizzante — cfr. §2.1 del piano)."""
+    ultimo: str | None = None
+    for e in storia.eventi:
+        if e.agente == pid and e.t <= t and e.luogo is not None:
+            ultimo = e.luogo
+    return ultimo
+
+
+def _evento_al_tick(storia: Storia, pid: str, t: int) -> Evento | None:
+    for e in storia.eventi:
+        if e.agente == pid and e.t == t:
+            return e
+    return None
+
+
+def _grafo_evento_senza_tempo(evento: Evento) -> Grafo:
+    """Stesso grafo di `evento_a_grafo`, senza il nodo/arco `obl:tempo`
+    finale (non modifica `evento_a_grafo`: `obl:tempo` è sempre l'ultimo
+    nodo/arco che aggiunge, quindi troncarli produce lo stesso ordine)."""
+    g = evento_a_grafo(evento)
+    return Grafo(nodi=g.nodi[:-1], archi=g.archi[:-1])
+
+
+def _genera_posizione_tempo(storia: Storia, rng: random.Random, n: int, n_tick: int) -> list[Domanda]:
+    pid = _protagonista(storia)
+    candidati = list(range(1, n_tick + 1))
+    scelti = rng.sample(candidati, min(n, len(candidati)))
+    domande = []
+    for t in scelti:
+        grafo_domanda = grafo_fatto("trovarsi", nsubj=pid, **{"obl:tempo": lemma_numero(t)}, quesito="dove")
+        luogo = _posizione_al_tick(storia, pid, t)
+        if luogo is None:
+            risposta = NON_LO_SO
+        else:
+            risposta = grafo_fatto("essere", nsubj=pid, **{"obl:luogo": luogo, "obl:tempo": lemma_numero(t)})
+        domande.append(Domanda("posizione_tempo", grafo_domanda, risposta))
+    return domande
+
+
+def _genera_azione_tempo(storia: Storia, rng: random.Random, n: int, n_tick: int) -> list[Domanda]:
+    pid = _protagonista(storia)
+    candidati = list(range(1, n_tick + 1))
+    scelti = rng.sample(candidati, min(n, len(candidati)))
+    domande = []
+    for t in scelti:
+        grafo_domanda = grafo_fatto("fare", nsubj=pid, **{"obl:tempo": lemma_numero(t)}, quesito="che-cosa")
+        evento = _evento_al_tick(storia, pid, t)
+        if evento is not None:
+            risposta = evento_a_grafo(evento)
+        else:
+            precedenti = [e for e in storia.eventi if e.agente == pid and e.t < t]
+            if not precedenti:
+                risposta = NON_LO_SO
+            elif precedenti[-1].azione == "dormire":
+                risposta = grafo_fatto("dormire", nsubj=pid, **{"obl:tempo": lemma_numero(t)})
+            else:
+                raise ValueError(
+                    f"tick {t} senza evento per {pid!r} ma l'ultimo evento precedente non è 'dormire': "
+                    f"{precedenti[-1]!r}"
+                )
+        domande.append(Domanda("azione_tempo", grafo_domanda, risposta))
+    return domande
+
+
+def _genera_azione_luogo(storia: Storia, rng: random.Random, n: int) -> list[Domanda]:
+    pid = _protagonista(storia)
+    per_luogo: dict[str, list[Evento]] = {}
+    for e in storia.eventi:
+        if e.agente == pid and e.luogo is not None:
+            per_luogo.setdefault(e.luogo, []).append(e)
+
+    candidati: list[str] = []
+    grafo_per_luogo: dict[str, Grafo] = {}
+    for luogo, eventi_luogo in per_luogo.items():
+        grafi = [_grafo_evento_senza_tempo(e) for e in eventi_luogo]
+        if all(g == grafi[0] for g in grafi):
+            candidati.append(luogo)
+            grafo_per_luogo[luogo] = grafi[0]
+
+    domande = []
+    for luogo in rng.sample(candidati, min(n, len(candidati))):
+        grafo_domanda = grafo_fatto("fare", nsubj=pid, **{"obl:luogo": luogo}, quesito="che-cosa")
+        domande.append(Domanda("azione_luogo", grafo_domanda, grafo_per_luogo[luogo]))
+    return domande
+
+
+def genera_domande_tempo(storia: Storia, rng: random.Random, n_per_tipo: int, n_tick: int) -> list[Domanda]:
+    domande: list[Domanda] = []
+    domande.extend(_genera_posizione_tempo(storia, rng, n_per_tipo, n_tick))
+    domande.extend(_genera_azione_tempo(storia, rng, n_per_tipo, n_tick))
+    domande.extend(_genera_azione_luogo(storia, rng, n_per_tipo))
     return domande
