@@ -337,3 +337,14 @@ Andrea.
   capacità/budget su Colab). Prossimo passo: decidere con Andrea il braccio
   (capacità d=384/12-layer, o budget 3× step) e ottenere il suo ok esplicito
   prima del run (>2h per il braccio budget, vincolo 5).
+
+- **2026-07-11 (sera): aperta una linea parallela decisa da Andrea —
+  esperimento "tempo"** (`fasi/FASE2_PIANO_TEMPO.md`): un solo personaggio
+  per storia (rotante), storie lunghe 12–24 tick, domande NUOVE condizionate
+  nel tempo/luogo («dove si trova X alle due?», «che cosa fa X alle
+  quattro?», «che cosa fa X in giardino?»), run `v1_tempo` da zero. Misura la
+  capacità a monte del binding multi-entità: seguire lo stato di UNA persona
+  nel tempo. Informativo in entrambi gli esiti (riesce → il muro è
+  l'interferenza tra entità, rafforza B/C2; fallisce → il tracking temporale
+  in sé non si forma, rafforza A2/C1). **A2 resta in coda per scelta
+  esplicita di Andrea** (non si lancia in parallelo per ora).
