@@ -7,7 +7,8 @@ eventi, l'ordine di riconoscimento è quello della tabella §5 (FASE1_PIANO.md).
 from __future__ import annotations
 
 from mondo import dati_mondo as dm
-from mondo.grafo import NON_LO_SO, Grafo, grafo_fatto
+from mondo.azioni import AZIONI
+from mondo.grafo import NON_LO_SO, Grafo, evento_a_grafo, grafo_fatto
 from mondo.numeri import lemma_numero
 from mondo.tipi import Evento
 
@@ -52,6 +53,17 @@ def _capitalizza(s: str) -> str:
 
 def _decapitalizza(s: str) -> str:
     return f"{s[0].lower()}{s[1:]}" if s else s
+
+
+# Interrogativo per gli eventi (esperimento "tempo",
+# fasi/FASE2_PIANO_TEMPO.md §3.2): "Che cosa fa Anna alle due?".
+_CHE_COSA: str = _capitalizza(_LESSICO["che-cosa"].tratti["superficie"])
+
+# Radici dei grafi-risposta "azione_tempo"/"azione_luogo": un evento del
+# mondo (esperimento "tempo"). Serve a distinguerle dalle radici omonime già
+# usate da altri tipi di domanda ("dare" per transfer, "dormire" per causa),
+# che non hanno mai `obl:luogo`.
+_NOMI_AZIONI_EVENTO: frozenset[str] = frozenset(AZIONI)
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +199,34 @@ def stacca_prefisso_tempo(frase: str, contesto: StatoDiscorso) -> tuple[int, str
         parola_numero, _, resto2 = resto.partition(" ")
         return mf.numero_da_lettere(parola_numero), resto2
     raise ValueError(f"prefisso di tempo non riconosciuto: {frase!r}")
+
+
+# --- ora come prefisso/suffisso "leggero" (domande/risposte del tipo tempo,
+# esperimento "tempo"): a differenza di `prefisso_tempo`/`stacca_prefisso_tempo`
+# non conosce "Intanto" (le domande/risposte non fanno mai parte della
+# narrazione in corso) e non solleva mai, ritorna `None` se non riconosce.
+
+def _stacca_prefisso_ora(testo: str) -> tuple[str, int | None]:
+    if testo.startswith("All'una "):
+        return testo[len("All'una "):], 1
+    if testo.startswith("Alle "):
+        resto = testo[len("Alle "):]
+        parola, spazio, resto2 = resto.partition(" ")
+        if not spazio:
+            return testo, None
+        try:
+            return resto2, mf.numero_da_lettere(parola)
+        except ValueError:
+            return testo, None
+    return testo, None
+
+
+def _stacca_suffisso_ora(testo: str) -> tuple[str, int | None]:
+    for t in range(1, 25):
+        suffisso = f" {mf.ora_in_lettere(t)}"
+        if testo.endswith(suffisso):
+            return testo[: -len(suffisso)], t
+    return testo, None
 
 
 # ---------------------------------------------------------------------------
@@ -610,6 +650,23 @@ def _ha_dato() -> str:
     return f"{mf.forma_verbale('avere', 'pres3s')} {mf.forma_verbale('dare', 'part')}"
 
 
+def _evento_da_rel(radice: str, rel: dict[str, str]) -> Evento:
+    """Inverso "leggero" di `evento_a_grafo` a partire dalle relazioni già
+    lette da un grafo-risposta (esperimento "tempo"): `t` è 0 se `obl:tempo`
+    non c'è (le risposte "azione_luogo" non lo portano e non lo usano, vedi
+    `rendi_evento_corpo`, che non legge mai `evento.t`)."""
+    return Evento(
+        t=valore_numero(rel["obl:tempo"]) if "obl:tempo" in rel else 0,
+        azione=radice,
+        agente=rel["nsubj"],
+        oggetto=rel.get("obj"),
+        destinatario=rel.get("iobj"),
+        luogo=rel.get("obl:luogo"),
+        luogo_origine=rel.get("obl:origine"),
+        argomento=rel.get("obl:argomento"),
+    )
+
+
 # --- rendering -------------------------------------------------------------
 
 def rendi_domanda(grafo: Grafo, contesto: StatoDiscorso) -> str:
@@ -618,11 +675,19 @@ def rendi_domanda(grafo: Grafo, contesto: StatoDiscorso) -> str:
     quesito = rel.get("quesito")
 
     if radice == "trovarsi" and quesito == "dove" and "nsubj" in rel:
-        return f"Dove si trova {sn(rel['nsubj'], contesto)}?"
+        base = f"Dove si trova {sn(rel['nsubj'], contesto)}"
+        if "obl:tempo" in rel:
+            return f"{base} {mf.ora_in_lettere(valore_numero(rel['obl:tempo']))}?"
+        return f"{base}?"
     if radice == "trovarsi" and quesito == "dove":
         agente_testo = sn(rel["nmod:agente"], contesto)
         return (f"Dove si trova {sn(rel['nmod:oggetto'], contesto)} che {agente_testo} "
                 f"{_ha_dato()} a {sn(rel['nmod:destinatario'], contesto)}?")
+    if radice == "fare" and quesito == "che-cosa" and "obl:tempo" in rel:
+        ora = mf.ora_in_lettere(valore_numero(rel["obl:tempo"]))
+        return f"{_CHE_COSA} fa {sn(rel['nsubj'], contesto)} {ora}?"
+    if radice == "fare" and quesito == "che-cosa" and "obl:luogo" in rel:
+        return f"{_CHE_COSA} fa {sn(rel['nsubj'], contesto)} {mf.loc_in(rel['obl:luogo'])}?"
     if radice == "avere" and quesito == "chi":
         return f"Chi ha {sn(rel['obj'], contesto)}?"
     if radice == "portare" and quesito == "quanti":
@@ -668,7 +733,30 @@ def rendi_risposta(grafo: Grafo, contesto: StatoDiscorso) -> str:
     # (anche quando il primo elemento è un sintagma comune, non un nome
     # proprio), quindi si costruisce la frase in minuscolo e si capitalizza
     # una sola volta, alla fine.
-    if radice == "essere" and "nmod:parentela" in rel:
+    #
+    # Risposte "posizione_tempo"/"azione_tempo"/"azione_luogo" (esperimento
+    # "tempo", fasi/FASE2_PIANO_TEMPO.md §3.2): contesto di discorso fresco
+    # (solo `max_indice` copiato, per nominare correttamente le istanze già
+    # introdotte nella storia; `posizione_persone`/`tick_corrente` restano
+    # vuoti apposta, così il luogo è SEMPRE esplicitato e non si dice mai
+    # "Intanto"). Vanno controllate PRIMA delle radici omonime già esistenti
+    # ("dare" per transfer, "dormire" per causa): quelle non hanno mai
+    # `obl:tempo`/`obl:luogo` insieme alla radice-evento, quindi l'ordine non
+    # cambia il loro comportamento.
+    if "obl:tempo" in rel:
+        contesto_fresco = StatoDiscorso(max_indice=dict(contesto.max_indice))
+        ora = mf.ora_in_lettere(valore_numero(rel["obl:tempo"]))
+        if radice == "essere":
+            corpo = f"{sn(rel['nsubj'], contesto_fresco)} è {mf.loc_in(rel['obl:luogo'])}"
+        elif radice == "dormire" and "obl:luogo" not in rel:
+            corpo = f"{sn(rel['nsubj'], contesto_fresco)} {mf.forma_verbale('dormire', 'pres3s')}"
+        else:
+            corpo = rendi_evento_corpo(_evento_da_rel(radice, rel), contesto_fresco)
+        testo = f"{ora[0].upper()}{ora[1:]} {corpo}."
+    elif radice in _NOMI_AZIONI_EVENTO and "obl:luogo" in rel:
+        contesto_fresco = StatoDiscorso(max_indice=dict(contesto.max_indice))
+        testo = f"{rendi_evento_corpo(_evento_da_rel(radice, rel), contesto_fresco)}."
+    elif radice == "essere" and "nmod:parentela" in rel:
         a, b, relazione = rel["nsubj"], rel["nmod:relativo"], rel["nmod:parentela"]
         testo = f"{sn(a, contesto)} è {_sn_parentela(relazione, a)} di {sn(b, contesto)}."
     elif radice == "essere":
@@ -734,7 +822,23 @@ def analizza_domanda(frase: str, contesto: StatoDiscorso) -> Grafo:
                 "nmod:destinatario": sn_inversa(d_testo, contesto),
                 "quesito": "dove",
             })
+        resto_senza_ora, t = _stacca_suffisso_ora(resto)
+        if t is not None:
+            return grafo_fatto("trovarsi", nsubj=sn_inversa(resto_senza_ora, contesto),
+                                **{"obl:tempo": lemma_numero(t)}, quesito="dove")
         return grafo_fatto("trovarsi", nsubj=sn_inversa(resto, contesto), quesito="dove")
+
+    if corpo.startswith(f"{_CHE_COSA} fa "):
+        resto = corpo[len(f"{_CHE_COSA} fa "):]
+        resto_senza_ora, t = _stacca_suffisso_ora(resto)
+        if t is not None:
+            return grafo_fatto("fare", nsubj=sn_inversa(resto_senza_ora, contesto),
+                                **{"obl:tempo": lemma_numero(t)}, quesito="che-cosa")
+        resto_senza_luogo, luogo_id = _stacca_clausola_luogo(resto)
+        if luogo_id is not None:
+            return grafo_fatto("fare", nsubj=sn_inversa(resto_senza_luogo, contesto),
+                                **{"obl:luogo": luogo_id}, quesito="che-cosa")
+        raise ValueError(f"domanda 'che cosa fa' malformata: {frase!r}")
 
     if corpo.startswith("Chi ha "):
         resto = corpo[len("Chi ha "):]
@@ -841,6 +945,46 @@ def _prova_risposta_parentela(corpo: str, contesto: StatoDiscorso) -> Grafo | No
     return grafo_fatto("essere", nsubj=a_id, **{"nmod:parentela": relazione, "nmod:relativo": b_id})
 
 
+def _prova_risposta_posizione_tempo(corpo: str, contesto: StatoDiscorso) -> Grafo | None:
+    resto, t = _stacca_prefisso_ora(corpo)
+    if t is None:
+        return None
+    idx = resto.find(" è ")
+    if idx == -1:
+        return None
+    e_testo = resto[:idx]
+    l_testo = resto[idx + len(" è "):]
+    try:
+        luogo_id = mf.luogo_da_loc_in(l_testo)
+    except ValueError:
+        return None
+    e_id = sn_inversa(e_testo, contesto)
+    return grafo_fatto("essere", nsubj=e_id, **{"obl:luogo": luogo_id, "obl:tempo": lemma_numero(t)})
+
+
+def _prova_risposta_azione_tempo(corpo: str, contesto: StatoDiscorso) -> Grafo | None:
+    resto, t = _stacca_prefisso_ora(corpo)
+    if t is None:
+        return None
+    agente, resto2 = _stacca_nome_persona(resto)
+    if agente is not None and resto2 == mf.forma_verbale("dormire", "pres3s"):
+        return grafo_fatto("dormire", nsubj=agente, **{"obl:tempo": lemma_numero(t)})
+    try:
+        evento = riconosci_evento_corpo(resto, contesto, t)
+    except ValueError:
+        return None
+    return evento_a_grafo(evento)
+
+
+def _prova_risposta_azione_luogo(corpo: str, contesto: StatoDiscorso) -> Grafo | None:
+    try:
+        evento = riconosci_evento_corpo(corpo, contesto, 0)
+    except ValueError:
+        return None
+    grafo_con_tempo = evento_a_grafo(evento)
+    return Grafo(nodi=grafo_con_tempo.nodi[:-1], archi=grafo_con_tempo.archi[:-1])
+
+
 def _prova_risposta_posizione(corpo: str, contesto: StatoDiscorso) -> Grafo | None:
     idx = corpo.find(" è ")
     if idx == -1:
@@ -923,11 +1067,14 @@ _PROVE_RISPOSTA = (
     _prova_risposta_raccolta,
     _prova_risposta_transfer,
     _prova_risposta_parentela,
+    _prova_risposta_posizione_tempo,
+    _prova_risposta_azione_tempo,
     _prova_risposta_posizione,
     _prova_risposta_possesso,
     _prova_risposta_conteggio_persona,
     _prova_risposta_conteggio_posto,
     _prova_risposta_causa,
+    _prova_risposta_azione_luogo,
 )
 
 

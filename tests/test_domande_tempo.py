@@ -10,6 +10,7 @@ import pytest
 
 from mondo import dati_mondo as dm
 from mondo.domande import (
+    _e_prelievo_risorsa,
     _evento_al_tick,
     _genera_azione_luogo,
     _genera_azione_tempo,
@@ -101,6 +102,62 @@ class TestAzioneTempo:
         rng = random.Random("x")
         with pytest.raises(ValueError):
             _genera_azione_tempo(storia, rng, n=3, n_tick=3)
+
+
+# ---------------------------------------------------------------------------
+# 2b. Prelievi da risorsa (melo/pozzo/bosco_legna) mai candidati: lo stampo
+#     di superficie non menziona l'istanza raccolta, il round-trip di
+#     lingua/ non sarebbe invertibile per una risposta isolata (vero bivio
+#     non previsto dal piano, deciso con Andrea il 2026-07-11 durante T2).
+# ---------------------------------------------------------------------------
+
+class TestPrelievoRisorsaEscluso:
+    def _storia_con_prelievo(self) -> Storia:
+        pid = "anna"
+        stato_finale = StatoMondo(
+            t=2, luoghi={}, collegamenti={},
+            persone={pid: StatoPersona(id=pid, lemma="Anna", genere="f", eta="anziano",
+                                        luogo_preferito=None, luogo="orto")},
+            oggetti={}, risorse={},
+        )
+        eventi = (
+            Evento(t=1, azione="prendere", agente=pid, oggetto="mela_3", argomento="melo", luogo="orto"),
+            Evento(t=2, azione="andare", agente=pid, luogo="giardino", luogo_origine="orto"),
+        )
+        return Storia(seed=0, eventi=eventi, stato_finale=stato_finale)
+
+    def test_e_prelievo_risorsa(self):
+        storia = self._storia_con_prelievo()
+        assert _e_prelievo_risorsa(storia.eventi[0]) is True
+        assert _e_prelievo_risorsa(storia.eventi[1]) is False
+
+    def test_azione_tempo_non_propone_il_tick_del_prelievo(self):
+        storia = self._storia_con_prelievo()
+        rng = random.Random("x")
+        domande = _genera_azione_tempo(storia, rng, n=2, n_tick=2)
+        tempi = {_tempo_della_domanda(d.grafo_domanda) for d in domande}
+        assert tempi == {2}
+
+    def test_azione_luogo_non_propone_il_luogo_del_prelievo(self):
+        storia = self._storia_con_prelievo()
+        rng = random.Random("x")
+        domande = _genera_azione_luogo(storia, rng, n=5)
+        luoghi = {_luogo_della_domanda(d.grafo_domanda) for d in domande}
+        assert "orto" not in luoghi
+
+    def test_mai_candidati_su_campione_reale(self):
+        for seed in range(50):
+            storia = _storia_cast1(seed)
+            pid = _cast_per_seed(seed)[0].id
+            rng = random.Random(f"test-{seed}")
+            for d in _genera_azione_tempo(storia, rng, n=N_TICK, n_tick=N_TICK):
+                t = _tempo_della_domanda(d.grafo_domanda)
+                evento = _evento_al_tick(storia, pid, t)
+                assert evento is None or not _e_prelievo_risorsa(evento)
+            for d in _genera_azione_luogo(storia, rng, n=10):
+                luogo = _luogo_della_domanda(d.grafo_domanda)
+                eventi_luogo = [e for e in storia.eventi if e.agente == pid and e.luogo == luogo]
+                assert not any(_e_prelievo_risorsa(e) for e in eventi_luogo)
 
 
 # ---------------------------------------------------------------------------

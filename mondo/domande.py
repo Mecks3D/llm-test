@@ -357,6 +357,11 @@ def genera_domande(storia: Storia, rng: random.Random, n_per_tipo: int = 6) -> l
 # non-lo-so solo nel raro caso di inizio-storia-nel-sonno, e "azione_luogo"
 # non lo produce mai per costruzione (vedi _genera_azione_luogo). Le domande
 # non-lo-so del mix v1_tempo arrivano dal tipo "posizione" esistente.
+#
+# Nota su "azione_tempo"/"azione_luogo" e i prelievi da risorsa (melo/pozzo/
+# bosco_legna): mai candidati (vedi _e_prelievo_risorsa) — vero bivio non
+# previsto dal piano, deciso con Andrea il 2026-07-11 durante T2 (round-trip
+# lingua/ altrimenti non invertibile per questi eventi, cfr. commit).
 # ---------------------------------------------------------------------------
 
 def _protagonista(storia: Storia) -> str:
@@ -390,6 +395,19 @@ def _grafo_evento_senza_tempo(evento: Evento) -> Grafo:
     return Grafo(nodi=g.nodi[:-1], archi=g.archi[:-1])
 
 
+def _e_prelievo_risorsa(evento: Evento) -> bool:
+    """Vero se `evento` è un "prendere" da una fonte finita (melo/pozzo/
+    bosco_legna). Questi eventi non sono candidati per "azione_tempo"/
+    "azione_luogo" (decisione di Andrea, 2026-07-11, vero bivio non previsto
+    dal piano): lo stampo di superficie per questi prelievi (lingua/stampi.py,
+    "raccoglie una mela dal melo") è deliberatamente indefinito — non
+    menziona MAI l'istanza raccolta (mela_1 vs mela_2...) perché nella
+    narrazione ordinaria l'indice si recupera dall'ordine di lettura. Una
+    risposta isolata e fuori ordine come queste due non porta quell'ordine:
+    il testo sarebbe identico per istanze diverse, quindi non invertibile."""
+    return evento.azione == "prendere" and evento.argomento in dm.RISORSE
+
+
 def _genera_posizione_tempo(storia: Storia, rng: random.Random, n: int, n_tick: int) -> list[Domanda]:
     pid = _protagonista(storia)
     candidati = list(range(1, n_tick + 1))
@@ -408,7 +426,12 @@ def _genera_posizione_tempo(storia: Storia, rng: random.Random, n: int, n_tick: 
 
 def _genera_azione_tempo(storia: Storia, rng: random.Random, n: int, n_tick: int) -> list[Domanda]:
     pid = _protagonista(storia)
-    candidati = list(range(1, n_tick + 1))
+    candidati = []
+    for t in range(1, n_tick + 1):
+        evento_t = _evento_al_tick(storia, pid, t)
+        if evento_t is not None and _e_prelievo_risorsa(evento_t):
+            continue  # ambiguo in lingua/: vedi nota di _e_prelievo_risorsa
+        candidati.append(t)
     scelti = rng.sample(candidati, min(n, len(candidati)))
     domande = []
     for t in scelti:
@@ -441,6 +464,8 @@ def _genera_azione_luogo(storia: Storia, rng: random.Random, n: int) -> list[Dom
     candidati: list[str] = []
     grafo_per_luogo: dict[str, Grafo] = {}
     for luogo, eventi_luogo in per_luogo.items():
+        if _e_prelievo_risorsa(eventi_luogo[0]):
+            continue  # ambiguo in lingua/: vedi nota di _e_prelievo_risorsa
         grafi = [_grafo_evento_senza_tempo(e) for e in eventi_luogo]
         if all(g == grafi[0] for g in grafi):
             candidati.append(luogo)

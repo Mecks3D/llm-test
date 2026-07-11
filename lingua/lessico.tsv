@@ -296,3 +296,9 @@ si	FUNZ	-	-
 mai	FUNZ	-	-
 intanto	FUNZ	-	-
 alle	FUNZ	-	-
+# che-cosa: interrogativo per gli eventi (esperimento "tempo",
+# fasi/FASE2_PIANO_TEMPO.md §3.1). Aggiunto IN CODA: gli id di
+# vocabolario.json seguono l'ordine di riga del lessico, una riga in coda
+# lascia invariati gli id 0-280 esistenti e i checkpoint vecchi restano
+# leggibili.
+che-cosa	INTERR	superficie=che cosa	-

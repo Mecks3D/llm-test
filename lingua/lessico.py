@@ -48,7 +48,7 @@ RELAZIONI_PARENTELA: tuple[str, ...] = (
 LEMMI_DOMANDE: tuple[str, ...] = (
     "chi", "quanti", "quante", "che-parente", "dove", "perche",
     "nessuno", "non-lo-so", "avere", "portare", "raccogliere",
-    "trovarsi", "essere", "esserci",
+    "trovarsi", "essere", "esserci", "che-cosa", "fare",
 )
 
 # Tratti specifici che lingua/stampi.py legge direttamente all'avvio (import
