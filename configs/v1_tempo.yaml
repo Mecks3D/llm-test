@@ -1,0 +1,57 @@
+# Esperimento "tempo" (fasi/FASE2_PIANO_TEMPO.md): un solo personaggio per
+# storia (rotante tra i 6, seed % 6), storie lunghe 12-24 tick, domande
+# condizionate nel tempo/luogo (posizione_tempo, azione_tempo, azione_luogo)
+# accanto a posizione. Misura una capacità a monte del binding multi-entità:
+# seguire come cambia lo stato di UNA persona nel tempo. Linea parallela alla
+# roadmap A2/B/C di fasi/FASE2_PIANO_DIAGNOSI.md, non la sostituisce.
+#
+# Da zero (niente --pesi-iniziali): attribuzione pulita, i checkpoint
+# esistenti porterebbero dentro la scorciatoia frequenza/recency diagnosticata
+# in FASE2_PIANO_DIAGNOSI.md. Run e dati propri (dati/tempo/): il curriculum
+# ufficiale e i config esistenti non cambiano.
+# Il blocco `modello:` resta IDENTICO a v1.yaml/v1_anti.yaml (stesse shape).
+
+nome_run: v1_tempo
+device: auto
+seed_torch: 1337
+
+percorsi:
+  lessico: lingua/lessico.tsv
+  vocabolario: cervello/vocabolario.json
+  dati_dir: dati/tempo
+  risultati_dir: dati/risultati
+
+dataset:
+  ctx: 3072
+  train_storie: 3000
+  dev_storie: 200
+  esame_storie: 200
+  n_per_tipo: 8
+  cast_rotante: true
+
+stadi:
+  1:
+    tipi: [posizione, posizione_tempo, azione_tempo, azione_luogo]
+    soglia: 0.95
+    storie_corte: {min: 12, max: 24}
+
+modello:
+  n_layer: 8
+  n_head: 8
+  d_model: 256
+  d_ff: 1024
+  dropout: 0.1
+
+training:
+  batch: 4
+  accumulo: 8
+  lr: 3.0e-4
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  warmup_step: 50
+  grad_clip: 1.0
+  early_stop: false  # vogliamo la curva intera (fasi/FASE2_PIANO_TEMPO.md §5)
+  max_step: 8000
+  intervallo_valutazione: 500
+  dev_campione: 200

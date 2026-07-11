@@ -322,3 +322,74 @@ vi compare come linea parallela) e lo «Stato di avanzamento» qui sotto.
   via domande esplicite: ambiguità → non si chiede; da zero; esperimento a
   parte con mix; cast rotante; tocco lingua/ approvato; niente A2 in
   parallelo). Nessuna tappa ancora eseguita. Prossimo passo: T1.
+
+- **2026-07-11: T1-T4 eseguiti in locale (esecutore in conversazione pulita,
+  su indicazione di Andrea di eseguire il piano alla lettera). Commit
+  f8a3a48 (T1), 697451d (T2), d92a67b (T3); T4 in questo commit.**
+
+  **T1** (`mondo/domande.py`): `genera_domande_tempo` +
+  `_genera_posizione_tempo`/`_genera_azione_tempo`/`_genera_azione_luogo` +
+  helper, come da §2. Estensione puramente additiva (verificato via `git
+  diff`: solo righe nuove oltre all'import). Cancello byte-identità:
+  10 test nuovi (incluso "verità via prefisso" su 50 seed), 510/510 test
+  della suite verdi.
+
+  **T2** (`lingua/`): riga `che-cosa` in coda al lessico (id 0-280
+  invariati, nuovo token ultimo, id 281 su 282 totali); `vocabolario.json`
+  rigenerato. Nuovi stampi domanda/risposta + inversi per i tre tipi;
+  le risposte "azione_*" riusano `rendi_evento_corpo` con un contesto di
+  discorso fresco (solo `max_indice` copiato dal contesto reale, così il
+  luogo è sempre esplicitato e non si dice mai "Intanto"). Cancelli duri:
+  round-trip tipi nuovi 320/320 seed (100%), `python -m lingua verifica
+  --da 0 --a 3000` sullo storico 100,0000%, 519/519 test verdi.
+
+  **Vero bivio non previsto dal piano** (fermato e chiesto ad Andrea durante
+  T2): lo stampo esistente di "prendere" da risorsa (melo/pozzo/bosco_legna,
+  es. "Anna raccoglie una mela dal melo") non menziona mai l'istanza
+  raccolta — assunzione valida solo nell'ordine della narrazione (l'indice
+  si recupera posizionalmente), non per una risposta isolata e fuori ordine
+  come "azione_tempo"/"azione_luogo", che quindi non sarebbe invertibile.
+  Andrea ha scelto di **escludere questi tick/luoghi dai candidati**
+  (`_e_prelievo_risorsa` in `mondo/domande.py`, mai chiesti) invece di
+  toccare lo stampo di superficie: riduce un poco la copertura di
+  "azione_tempo"/"azione_luogo" ma non tocca la grammatica esistente.
+
+  **T3** (`esami/genera.py`): `dataset.cast_rotante: true` (errore se
+  insieme a `dataset.cast`); tutti i punti che chiamavano
+  `_cast_persone(config)` ora passano da `_cast_per_seed(config, seed)`
+  (`esami/genera.py` e `esami/diagnosi.py`). `genera_record` integra i tipi
+  tempo con RNG separato (`domande-tempo-{seed}`), percorso normale (filtro
+  `tipi_ammessi`), mai la selezione anti-scorciatoia. Nuovo split
+  `tracking_tempo.jsonl` (analogo A3) + CLI `--split tracking-tempo` su
+  `genera.py` e `diagnosi.py`. Cancello byte-identità: confrontato con
+  `PYTHONHASHSEED` fisso (l'iterazione sui `set` in `mondo/domande.py` è
+  altrimenti instabile tra processi diversi — comportamento preesistente,
+  non toccato qui, irrilevante all'interno di un singolo processo/test).
+  532/532 test verdi.
+
+  **T4** (`configs/v1_tempo.yaml`, `configs/v1_tempo_fumo.yaml`): come da
+  §5. Misura delle lunghezze sul train (`v1_tempo.yaml`, 3.000 storie,
+  seed 0-2999, prima del run):
+
+  | Metrica | Valore |
+  |---|---|
+  | Esempi totali | 65.117 |
+  | Lunghezza sequenza composta: max | 514 token (ctx=3072, ampio margine) |
+  | Lunghezza sequenza composta: media / p50 / p90 / p99 | 326 / 326 / 414 / 467 |
+  | Composizione: `posizione` | 15.517 (23,8%) |
+  | Composizione: `posizione_tempo` | 24.000 (36,9%) |
+  | Composizione: `azione_tempo` | 23.999 (36,9%) |
+  | Composizione: `azione_luogo` | 1.601 (2,5%) — raro per costruzione: richiede eventi ripetuti identici (a meno del tempo) nello stesso luogo |
+  | Quota non-lo-so nel tipo `posizione` | 38,5% (sopra il ~30% nominale di `QUOTA_NON_LO_SO_PER_TIPO`: con 1 sola persona molti oggetti non vengono mai toccati, il bacino "derivabili" si esaurisce prima di riempire la quota "facile/difficile", non un bug) |
+
+  `colab_training.ipynb` sezione 12 aggiunta (fumo `v1_tempo_fumo` → run
+  vero `v1_tempo` con `--copia-sicurezza` su Drive → split
+  `tracking_tempo` → `esami.diagnosi` su entrambi i checkpoint, split
+  `esame` e `tracking-tempo`, JSON copiati su Drive), sullo stesso stile
+  della sezione 10 (v1_anti).
+
+  **Prossimo passo**: T5, lancia Andrea su Colab. Prima il fumo
+  (`v1_tempo_fumo`, sezione 12 del notebook): cancello = pipeline verde,
+  composizione per tipo sensata (tabella sopra, scala ridotta), esattezza_dev
+  sopra zero. Poi il run vero (12b) SOLO dopo l'ok esplicito di Andrea al
+  fumo.

@@ -1,0 +1,49 @@
+# Fumo dell'esperimento "tempo" (fasi/FASE2_PIANO_TEMPO.md, T5): SOLO stadio
+# 1, dataset e step ridotti per verificare in fretta che cast rotante +
+# domande condizionate nel tempo/luogo + pipeline funzionino prima del run
+# vero (configs/v1_tempo.yaml, stima ~1-1,5h). Non è un config di produzione:
+# non si usa per gli esami del curriculum.
+
+nome_run: v1_tempo_fumo
+device: auto
+seed_torch: 1337
+
+percorsi:
+  lessico: lingua/lessico.tsv
+  vocabolario: cervello/vocabolario.json
+  dati_dir: dati/tempo_fumo
+  risultati_dir: dati/risultati
+
+dataset:
+  ctx: 3072
+  train_storie: 300
+  dev_storie: 300
+  esame_storie: 300
+  n_per_tipo: 8
+  cast_rotante: true
+
+stadi:
+  1:
+    tipi: [posizione, posizione_tempo, azione_tempo, azione_luogo]
+    soglia: 0.95
+    storie_corte: {min: 12, max: 24}
+
+modello:
+  n_layer: 8
+  n_head: 8
+  d_model: 256
+  d_ff: 1024
+  dropout: 0.1
+
+training:
+  batch: 4
+  accumulo: 8
+  lr: 3.0e-4
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  warmup_step: 50
+  grad_clip: 1.0
+  max_step: 300
+  intervallo_valutazione: 100
+  dev_campione: 200
