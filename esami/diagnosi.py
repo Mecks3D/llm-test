@@ -30,7 +30,15 @@ from cervello.sequenza import token_a_grafo
 from cervello.vocabolario import carica_vocabolario
 
 from .esamina import CATEGORIE, _carica_modello, dispositivo, valuta_esempio
-from .genera import PROJECT_ROOT, _cast_persone, _n_tick, carica_config, percorso_dataset, percorso_esame_tracking
+from .genera import (
+    PROJECT_ROOT,
+    _cast_per_seed,
+    _n_tick,
+    carica_config,
+    percorso_dataset,
+    percorso_esame_tracking,
+    percorso_tracking_tempo,
+)
 
 BUCKET_DISTANZA = ("0", "1-2", "3-5", ">=6")
 
@@ -145,7 +153,7 @@ def esegui_diagnosi(
         chiave = (r["seed"], r.get("troncamento"))
         if chiave not in cache_storie:
             n_tick = r["troncamento"] if r.get("troncamento") is not None else _n_tick(stadio, r["seed"], config)
-            cache_storie[chiave] = genera_storia(seed=r["seed"], n_tick=n_tick, persone=_cast_persone(config))
+            cache_storie[chiave] = genera_storia(seed=r["seed"], n_tick=n_tick, persone=_cast_per_seed(config, r["seed"]))
         return cache_storie[chiave]
 
     for r, esempio in coppie:
@@ -222,7 +230,7 @@ def _cli() -> None:
     ap.add_argument("--config", required=True)
     ap.add_argument("--stadio", type=int, required=True)
     ap.add_argument("--checkpoint", required=True)
-    ap.add_argument("--split", choices=("train", "dev", "esame", "tracking"), default="esame")
+    ap.add_argument("--split", choices=("train", "dev", "esame", "tracking", "tracking-tempo"), default="esame")
     ap.add_argument("--max-esempi", type=int, default=None)
     args = ap.parse_args()
 
@@ -231,10 +239,17 @@ def _cli() -> None:
     vocab = carica_vocabolario()
     modello = _carica_modello(config, args.checkpoint, device)
 
-    percorso_in = (
-        percorso_esame_tracking(args.stadio, config) if args.split == "tracking"
-        else percorso_dataset(args.stadio, args.split, config)
-    )
+    if args.split == "tracking":
+        percorso_in = percorso_esame_tracking(args.stadio, config)
+    elif args.split == "tracking-tempo":
+        # Split dell'esperimento "tempo" (fasi/FASE2_PIANO_TEMPO.md §4.3): le
+        # metriche 2-5 sono specifiche di "posizione" (stato finale) e non si
+        # applicano a "posizione_tempo" (stato a un tick passato), quindi qui
+        # restano a zero — esattezza/conteggi (metrica 1) restano comunque
+        # corretti, generici rispetto al tipo (vedi il loop sotto).
+        percorso_in = percorso_tracking_tempo(args.stadio, config)
+    else:
+        percorso_in = percorso_dataset(args.stadio, args.split, config)
     record = _carica_record(percorso_in)
     esito = esegui_diagnosi(
         modello, vocab, record, config, args.stadio, config["dataset"]["ctx"], device,

@@ -201,13 +201,19 @@ from mondo.grafo import NON_LO_SO, grafo_fatto
 from mondo.simulatore import Storia
 from mondo.tipi import Evento, StatoMondo
 from esami.genera import (
+    TIPI_TEMPO,
+    _cast_per_seed,
     _classifica_domanda_posizione,
     _record_per_seed,
     _seleziona_posizione,
     _tracking_puro,
+    _tracking_puro_tempo,
     genera_esame_tracking,
+    genera_tracking_tempo,
     percorso_esame_tracking,
+    percorso_tracking_tempo,
     scrivi_esame_tracking,
+    scrivi_tracking_tempo,
 )
 
 
@@ -365,6 +371,119 @@ class TestEsameTracking:
         contenuto1 = p1.read_bytes()
         assert p1 == percorso_esame_tracking(1, config)
         p2 = scrivi_esame_tracking(1, config)
+        assert p2.read_bytes() == contenuto1
+
+
+# ---------------------------------------------------------------------------
+# Esperimento "tempo" (fasi/FASE2_PIANO_TEMPO.md §4): cast rotante,
+# integrazione in genera_record, split diagnostico tracking_tempo.jsonl.
+# ---------------------------------------------------------------------------
+
+def _config_piccolo_tempo(tmp_path, **override_dataset):
+    override_dataset.setdefault("cast_rotante", True)
+    config = _config_piccolo(tmp_path, **override_dataset)
+    config["stadi"][1]["tipi"] = ["posizione", "posizione_tempo", "azione_tempo", "azione_luogo"]
+    config["stadi"][1]["storie_corte"] = {"min": 12, "max": 24}
+    return config
+
+
+class TestCastRotante:
+    def test_assente_come_prima_byte_identico(self, tmp_path):
+        config_vecchio = _config_piccolo(tmp_path / "vecchio")
+        config_nuovo = _config_piccolo(tmp_path / "nuovo")  # niente cast_rotante
+        for seed in range(10):
+            assert _cast_per_seed(config_nuovo, seed) == _cast_persone(config_nuovo)
+            r1 = genera_record(1, seed, config_vecchio)
+            r2 = genera_record(1, seed, config_nuovo)
+            assert r1 == r2
+
+    def test_rotazione_deterministica_su_seed_mod_6(self, tmp_path):
+        config = _config_piccolo_tempo(tmp_path)
+        for seed in range(12):
+            cast = _cast_per_seed(config, seed)
+            assert len(cast) == 1
+            assert cast[0] == dm.PERSONE[seed % len(dm.PERSONE)]
+
+    def test_cast_e_cast_rotante_insieme_solleva(self, tmp_path):
+        config = _config_piccolo(tmp_path, cast=["anna"], cast_rotante=True)
+        with pytest.raises(ValueError, match="cast_rotante"):
+            _cast_per_seed(config, 0)
+
+    def test_genera_record_rispetta_il_cast_rotante(self, tmp_path):
+        config = _config_piccolo_tempo(tmp_path)
+        for seed in range(8):
+            record = genera_record(1, seed, config)
+            entita_storia = {tok for tok in record["storia"] if tok in {p.id for p in dm.PERSONE}}
+            atteso = {dm.PERSONE[seed % len(dm.PERSONE)].id}
+            assert entita_storia <= atteso
+
+
+class TestIntegrazioneDomandeTempo:
+    def test_tipi_tempo_compaiono_quando_ammessi(self, tmp_path):
+        config = _config_piccolo_tempo(tmp_path)
+        tipi_visti: set[str] = set()
+        for seed in range(15):
+            record = genera_record(1, seed, config)
+            tipi_visti |= {e["tipo"] for e in record["esempi"]}
+        assert tipi_visti & TIPI_TEMPO
+
+    def test_rng_separato_non_cambia_le_estrazioni_esistenti(self, tmp_path):
+        config_solo_posizione = _config_piccolo_tempo(tmp_path / "a", n_per_tipo=6)
+        config_solo_posizione["stadi"][1]["tipi"] = ["posizione"]
+        config_con_tempo = _config_piccolo_tempo(tmp_path / "b", n_per_tipo=6)
+        for seed in range(10):
+            r1 = genera_record(1, seed, config_solo_posizione)
+            r2 = genera_record(1, seed, config_con_tempo)
+            esempi_posizione_2 = [e for e in r2["esempi"] if e["tipo"] == "posizione"]
+            assert r1["esempi"] == esempi_posizione_2
+            assert r1["storia"] == r2["storia"]
+
+    def test_tipi_tempo_assenti_se_non_ammessi(self, tmp_path):
+        config = _config_piccolo_tempo(tmp_path)
+        config["stadi"][1]["tipi"] = ["posizione"]
+        for seed in range(10):
+            record = genera_record(1, seed, config)
+            assert not ({e["tipo"] for e in record["esempi"]} & TIPI_TEMPO)
+
+
+class TestTrackingTempo:
+    def test_ogni_domanda_e_gia_nellesame_ufficiale(self, tmp_path):
+        config = _config_piccolo_tempo(tmp_path, esame_storie=40)
+        tracking = genera_tracking_tempo(1, config)
+        assert tracking  # il campione di prova produce almeno una storia utile
+
+        esame = {r["seed"]: r for r in genera_dataset(1, "esame", config)}
+        for r in tracking:
+            assert r["seed"] in esame
+            assert r["storia"] == esame[r["seed"]]["storia"]
+            esempi_ufficiali = esame[r["seed"]]["esempi"]
+            for esempio in r["esempi"]:
+                assert esempio["tipo"] == "posizione_tempo"
+                assert esempio in esempi_ufficiali
+
+    def test_seed_solo_dalla_finestra_esame(self, tmp_path):
+        config = _config_piccolo_tempo(tmp_path, esame_storie=40)
+        finestra = set(finestra_seed(1, "esame", config))
+        for r in genera_tracking_tempo(1, config):
+            assert r["seed"] in finestra
+
+    def test_tipo_non_ammesso_ritorna_vuoto(self, tmp_path):
+        config = _config_piccolo_tempo(tmp_path, esame_storie=10)
+        config["stadi"][1]["tipi"] = ["posizione"]
+        assert genera_tracking_tempo(1, config) == []
+
+    def test_cast_non_rotante_solleva(self, tmp_path):
+        config = _config_piccolo_tempo(tmp_path, esame_storie=10)
+        del config["dataset"]["cast_rotante"]
+        with pytest.raises(ValueError, match="cast_rotante"):
+            genera_tracking_tempo(1, config)
+
+    def test_scrittura_deterministica(self, tmp_path):
+        config = _config_piccolo_tempo(tmp_path, esame_storie=40)
+        p1 = scrivi_tracking_tempo(1, config)
+        contenuto1 = p1.read_bytes()
+        assert p1 == percorso_tracking_tempo(1, config)
+        p2 = scrivi_tracking_tempo(1, config)
         assert p2.read_bytes() == contenuto1
 
 

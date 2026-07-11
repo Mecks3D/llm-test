@@ -21,9 +21,10 @@ from typing import Any
 import yaml
 
 from mondo import dati_mondo as dm
-from mondo.domande import Domanda, genera_domande
+from mondo.domande import Domanda, genera_domande, genera_domande_tempo
 from mondo.generatore import _lunghezza_storia
 from mondo.grafo import NON_LO_SO, Grafo, evento_a_grafo
+from mondo.numeri import VALORE_A_LEMMA
 from mondo.simulatore import Storia, genera_storia
 
 from cervello.sequenza import componi_esempio, grafo_a_token
@@ -32,6 +33,10 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _PERCORSO_CONFIG_DEFAULT = PROJECT_ROOT / "configs" / "v1.yaml"
 
 SPLIT_VALIDI = ("train", "dev", "esame")
+
+# I tre tipi dell'esperimento "tempo" (fasi/FASE2_PIANO_TEMPO.md §2): mai nel
+# curriculum ufficiale a meno che uno stadio non li elenchi esplicitamente.
+TIPI_TEMPO: frozenset[str] = frozenset({"posizione_tempo", "azione_tempo", "azione_luogo"})
 
 
 def carica_config(percorso: str | Path = _PERCORSO_CONFIG_DEFAULT) -> dict[str, Any]:
@@ -104,6 +109,22 @@ def _cast_persone(config: dict) -> tuple[dm.Persona, ...] | None:
     return persone
 
 
+def _cast_per_seed(config: dict, seed: int) -> tuple[dm.Persona, ...] | None:
+    """Cast della storia per questo seed. `dataset.cast_rotante: true`
+    (esperimento "tempo", fasi/FASE2_PIANO_TEMPO.md §4.1) dà una sola
+    persona a rotazione deterministica (`seed % len(dm.PERSONE)`), diversa
+    da `dataset.cast` (fisso per l'intero dataset) — le due chiavi non
+    possono coesistere. Assente -> `_cast_persone(config)`, comportamento
+    di sempre, byte identico."""
+    ds = config["dataset"]
+    cast_rotante = ds.get("cast_rotante", False)
+    if cast_rotante and ds.get("cast") is not None:
+        raise ValueError("dataset.cast e dataset.cast_rotante non possono essere entrambi presenti")
+    if cast_rotante:
+        return (dm.PERSONE[seed % len(dm.PERSONE)],)
+    return _cast_persone(config)
+
+
 def _lemma_per_relazione(grafo: Grafo, relazione: str) -> str:
     for arco in grafo.archi:
         if arco.relazione == relazione:
@@ -165,6 +186,26 @@ def _tracking_puro(storia: Storia, domanda: Domanda) -> bool:
     non esiste, le euristiche non si applicano)."""
     proprieta = _d1_d2_d3(storia, domanda)
     return proprieta is not None and all(proprieta)
+
+
+_LEMMA_A_VALORE_NUM: dict[str, int] = {lemma: valore for valore, lemma in VALORE_A_LEMMA.items()}
+
+
+def _tracking_puro_tempo(storia: Storia, pid: str, domanda: Domanda, n_tick: int) -> bool:
+    """Analogo di `_tracking_puro` per "posizione_tempo" (esperimento
+    "tempo", fasi/FASE2_PIANO_TEMPO.md §4.3): vero se l'oro non è né il
+    luogo più frequente della storia né la posizione finale del
+    protagonista, e il tick chiesto è lontano dalla coda (`n_tick - t >= 3`
+    — né la scorciatoia di frequenza, né lo stato finale, né roba fresca).
+    Falso per "non-lo-so" (l'oro non esiste)."""
+    if domanda.grafo_risposta == NON_LO_SO:
+        return False
+    oro = _lemma_per_relazione(domanda.grafo_risposta, "obl:luogo")
+    t = _LEMMA_A_VALORE_NUM[_lemma_per_relazione(domanda.grafo_domanda, "obl:tempo")]
+    luoghi = [e.luogo for e in storia.eventi if e.luogo is not None]
+    piu_frequente = Counter(luoghi).most_common(1)[0][0]
+    posizione_finale = storia.stato_finale.luogo_effettivo(pid)
+    return oro != piu_frequente and oro != posizione_finale and (n_tick - t) >= 3
 
 
 def _seleziona_posizione(
@@ -235,7 +276,7 @@ def genera_record(
     ctx = ds["ctx"]
 
     n_tick = troncamento if troncamento is not None else _n_tick(stadio, seed, config)
-    storia = genera_storia(seed=seed, n_tick=n_tick, persone=_cast_persone(config))
+    storia = genera_storia(seed=seed, n_tick=n_tick, persone=_cast_per_seed(config, seed))
     token_eventi = [grafo_a_token(evento_a_grafo(e)) for e in storia.eventi]
     storia_flat = [t for tok in token_eventi for t in tok]
 
@@ -245,6 +286,13 @@ def genera_record(
     seme_domande = f"domande-{seed}" if troncamento is None else f"domande-{seed}-t{troncamento}"
     rng_domande = random.Random(seme_domande)
     candidate = genera_domande(storia, rng_domande, n_per_tipo=n_candidate)
+
+    if tipi_ammessi & TIPI_TEMPO:
+        # RNG separato da "domande-{seed}" (decisione §1.3 del piano tempo):
+        # le estrazioni dei tipi esistenti non cambiano. Percorso normale
+        # (filtro tipi_ammessi sotto), MAI la selezione anti-scorciatoia.
+        seme_tempo = f"domande-tempo-{seed}" if troncamento is None else f"domande-tempo-{seed}-t{troncamento}"
+        candidate += genera_domande_tempo(storia, random.Random(seme_tempo), n_per_tipo=n_candidate, n_tick=n_tick)
 
     esempi: list[dict] = []
     for d in candidate:
@@ -320,7 +368,7 @@ def genera_esame_tracking(stadio: int, config: dict) -> list[dict]:
     for seed in finestra_seed(stadio, "esame", config):
         _verifica_seed(seed, "esame")
         n_tick = _n_tick(stadio, seed, config)
-        storia = genera_storia(seed=seed, n_tick=n_tick, persone=_cast_persone(config))
+        storia = genera_storia(seed=seed, n_tick=n_tick, persone=_cast_per_seed(config, seed))
         token_eventi = [grafo_a_token(evento_a_grafo(e)) for e in storia.eventi]
 
         rng_domande = random.Random(f"domande-{seed}")
@@ -355,6 +403,65 @@ def scrivi_esame_tracking(stadio: int, config: dict) -> Path:
     return percorso
 
 
+def genera_tracking_tempo(stadio: int, config: dict) -> list[dict]:
+    """Split diagnostico aggiuntivo e permanente per l'esperimento "tempo"
+    (analogo ad A3/`tracking.jsonl`, fasi/FASE2_PIANO_TEMPO.md §4.3): solo
+    domande "posizione_tempo" dove `_tracking_puro_tempo` vale. Stessi seed
+    e stesse domande candidate dell'esame ufficiale (mai train): ogni
+    domanda qui è già presente in `esame.jsonl`, questo file la AFFIANCA,
+    non la sostituisce. Storie senza nessuna domanda "tracking puro tempo"
+    sono escluse dal risultato."""
+    tipi_ammessi = set(_config_stadio(stadio, config)["tipi"])
+    if "posizione_tempo" not in tipi_ammessi:
+        return []
+    ds = config["dataset"]
+    ctx = ds["ctx"]
+
+    record: list[dict] = []
+    for seed in finestra_seed(stadio, "esame", config):
+        _verifica_seed(seed, "esame")
+        n_tick = _n_tick(stadio, seed, config)
+        cast = _cast_per_seed(config, seed)
+        if cast is None or len(cast) != 1:
+            raise ValueError(
+                f"tracking_tempo richiede un cast di una sola persona (dataset.cast_rotante: true): seed {seed}"
+            )
+        pid = cast[0].id
+        storia = genera_storia(seed=seed, n_tick=n_tick, persone=cast)
+        token_eventi = [grafo_a_token(evento_a_grafo(e)) for e in storia.eventi]
+
+        rng_domande_tempo = random.Random(f"domande-tempo-{seed}")
+        candidate = genera_domande_tempo(storia, rng_domande_tempo, n_per_tipo=ds["n_per_tipo"], n_tick=n_tick)
+
+        esempi = [
+            _componi_e_valida(
+                stadio, seed, d.tipo, token_eventi,
+                grafo_a_token(d.grafo_domanda), grafo_a_token(d.grafo_risposta), ctx,
+            )
+            for d in candidate if d.tipo == "posizione_tempo" and _tracking_puro_tempo(storia, pid, d, n_tick)
+        ]
+        if esempi:
+            storia_flat = [t for tok in token_eventi for t in tok]
+            record.append({"stadio": stadio, "seed": seed, "storia": storia_flat, "esempi": esempi})
+    return record
+
+
+def percorso_tracking_tempo(stadio: int, config: dict) -> Path:
+    dati_dir = PROJECT_ROOT / config["percorsi"]["dati_dir"]
+    return dati_dir / f"stadio{stadio}" / "tracking_tempo.jsonl"
+
+
+def scrivi_tracking_tempo(stadio: int, config: dict) -> Path:
+    record = genera_tracking_tempo(stadio, config)
+    percorso = percorso_tracking_tempo(stadio, config)
+    percorso.parent.mkdir(parents=True, exist_ok=True)
+    with open(percorso, "w", encoding="utf-8") as f:
+        for r in record:
+            f.write(json.dumps(r, ensure_ascii=False))
+            f.write("\n")
+    return percorso
+
+
 def scrivi_dataset(stadio: int, split: str, config: dict) -> Path:
     record = genera_dataset(stadio, split, config)
     percorso = percorso_dataset(stadio, split, config)
@@ -370,16 +477,18 @@ def _cli() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--config", default=str(_PERCORSO_CONFIG_DEFAULT))
     ap.add_argument("--stadio", type=int, required=True)
-    ap.add_argument("--split", choices=(*SPLIT_VALIDI, "tracking"), default=None)
+    ap.add_argument("--split", choices=(*SPLIT_VALIDI, "tracking", "tracking-tempo"), default=None)
     args = ap.parse_args()
 
     config = carica_config(args.config)
-    # "tracking" (A3) va SOLO se richiesto esplicitamente: il default senza
-    # --split resta train+dev+esame, byte-identico a prima di A3.
+    # "tracking"/"tracking-tempo" vanno SOLO se richiesti esplicitamente: il
+    # default senza --split resta train+dev+esame, byte-identico a prima.
     split_da_fare = [args.split] if args.split else list(SPLIT_VALIDI)
     for split in split_da_fare:
         if split == "tracking":
             percorso = scrivi_esame_tracking(args.stadio, config)
+        elif split == "tracking-tempo":
+            percorso = scrivi_tracking_tempo(args.stadio, config)
         else:
             percorso = scrivi_dataset(args.stadio, split, config)
         n = sum(1 for _ in open(percorso, encoding="utf-8"))

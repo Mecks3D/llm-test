@@ -178,3 +178,50 @@ class TestEseguiDiagnosi:
         )
         assert esito["n_esempi"] == 1
         assert esito["n_posizione_oro_noto"] == 1
+
+
+_STORIA_TEMPO = Storia(
+    seed=300,
+    eventi=(
+        Evento(t=1, azione="andare", agente="anna", luogo="giardino", luogo_origine="cucina"),
+        Evento(t=2, azione="andare", agente="anna", luogo="orto", luogo_origine="giardino"),
+        Evento(t=3, azione="andare", agente="anna", luogo="cucina", luogo_origine="orto"),
+        Evento(t=4, azione="andare", agente="anna", luogo="salotto", luogo_origine="cucina"),
+        Evento(t=5, azione="andare", agente="anna", luogo="camera", luogo_origine="salotto"),
+    ),
+    stato_finale=_stato({"anna": "camera"}),
+)
+
+
+@pytest.mark.torch
+class TestEseguiDiagnosiTrackingTempo:
+    """esami/diagnosi.py --split tracking-tempo (fasi/FASE2_PIANO_TEMPO.md
+    §4.3): esegui_diagnosi resta generico (metrica 1 sempre corretta), le
+    metriche 2-5 (specifiche di "posizione") restano a zero perché il tipo
+    è "posizione_tempo", non "posizione" — vedi commento nel CLI."""
+
+    def test_metrica_1_corretta_metriche_posizione_a_zero(self, monkeypatch):
+        monkeypatch.setattr(diagnosi_mod, "genera_storia", lambda seed, n_tick, persone: _STORIA_TEMPO)
+        vocab = carica_vocabolario()
+
+        # posizione_tempo a t=1 (oro "giardino"): un solo esempio, cosi'
+        # niente ambiguita' di sessione nel modello iniettato (T monotona).
+        dom = grafo_a_token(grafo_fatto("trovarsi", nsubj="anna", **{"obl:tempo": "uno"}, quesito="dove"))
+        ris = grafo_a_token(grafo_fatto("essere", nsubj="anna", **{"obl:luogo": "giardino", "obl:tempo": "uno"}))
+        record = [{"seed": 300, "storia": [], "esempi": [{"tipo": "posizione_tempo", "domanda": dom, "risposta": ris}]}]
+
+        modello = _ModelloMultiRisposta(vocab, [["(", "non-lo-so", ")", "[FINE]"]])
+        config = {
+            "stadi": {1: {"tipi": ["posizione_tempo"], "soglia": 0.95, "storie_corte": True}},
+            "dataset": {},
+        }
+        esito = diagnosi_mod.esegui_diagnosi(modello, vocab, record, config, stadio=1, ctx=200, device="cpu")
+
+        assert esito["n_esempi"] == 1
+        assert esito["conteggi"] == {"esatto": 0, "invenzione": 0, "astensione_errata": 1, "malformata": 0, "errore": 0}
+        assert esito["esattezza"] == 0.0
+        # metriche specifiche di "posizione": mai popolate, il tipo qui è
+        # "posizione_tempo".
+        assert esito["n_posizione_oro_noto"] == 0
+        assert esito["per_entita"] == {}
+        assert esito["anatomia_errori"] == {}
