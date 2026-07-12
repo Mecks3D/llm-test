@@ -17,7 +17,7 @@ import torch
 
 from mondo.grafo import NON_LO_SO, Grafo
 
-from cervello.modello import ConfigModello, Modello
+from cervello.modello import CacheKV, ConfigModello, Modello
 from cervello.sequenza import (
     APERTA,
     CHIUSA,
@@ -177,90 +177,179 @@ def _raggruppa_eventi_per_tick(storia_flat: list[str]) -> list[tuple[str, list[l
     return per_tick
 
 
-def _genera_blocco_stato(
-    modello: Modello, vocab: Vocabolario, ids: list[int], ctx: int, device: str,
-) -> list[int]:
-    """Free-run del contenuto di un blocco [STATO] (`ids` termina con [STATO]).
+class _DecoderPieno:
+    """Backend di decodifica SENZA cache: ricalcola il forward sull'intera
+    sequenza a ogni passo. È byte-identico al codice pre-cache (un `modello(x)`
+    per token generato, i token teacher-forced solo accodati senza forward) e
+    fa da ORACOLO per il test del backend con cache. `alimenta` accoda token
+    senza chiamare il modello; `prossimo` fa il forward e ritorna l'argmax."""
+
+    def __init__(self, modello: Modello, device: str) -> None:
+        self._modello = modello
+        self._device = device
+        self._ids: list[int] = []
+
+    def alimenta(self, ids: list[int]) -> None:
+        self._ids.extend(ids)
+
+    def prossimo(self) -> int:
+        x = torch.tensor([self._ids], dtype=torch.long, device=self._device)
+        return int(torch.argmax(self._modello(x)[0, -1]).item())
+
+    def tronca(self, n: int) -> None:
+        del self._ids[len(self._ids) - n:]
+
+    def clona(self) -> "_DecoderPieno":
+        d = _DecoderPieno(self._modello, self._device)
+        d._ids = list(self._ids)
+        return d
+
+    @property
+    def lunghezza(self) -> int:
+        return len(self._ids)
+
+
+class _DecoderCache:
+    """Backend di decodifica con KV-cache: ogni token nuovo costa un forward su
+    UN solo passo (attende alle k/v già in cache) invece che sull'intera
+    sequenza. `alimenta` fa avanzare la cache coi token dati (teacher forcing o
+    token appena generati) e memorizza i logit dell'ultima posizione; `prossimo`
+    ne ritorna l'argmax. Stessa interfaccia di `_DecoderPieno`."""
+
+    def __init__(self, modello: Modello, device: str) -> None:
+        self._modello = modello
+        self._device = device
+        self._cache = CacheKV(modello.config.n_layer)
+        self._logits: torch.Tensor | None = None
+
+    def alimenta(self, ids: list[int]) -> None:
+        # un token alla volta (sempre T=1: singola query sulla cache): stesso
+        # identico percorso a ogni passo, per massimizzare la byte-identità coi
+        # logit del ricalcolo pieno (la k/v in cache è comunque indipendente dal
+        # kernel di attenzione — è una proiezione lineare dell'input)
+        for t in ids:
+            x = torch.tensor([[t]], dtype=torch.long, device=self._device)
+            self._logits = self._modello(x, cache=self._cache)[0, -1]
+
+    def prossimo(self) -> int:
+        return int(torch.argmax(self._logits).item())
+
+    def tronca(self, n: int) -> None:
+        # rollback di token generati e scartati: dopo si esce sempre dal blocco,
+        # quindi i logit correnti non si rileggono prima di un nuovo alimenta
+        self._cache.tronca_posizioni(n)
+        self._logits = None
+
+    def clona(self) -> "_DecoderCache":
+        d = _DecoderCache(self._modello, self._device)
+        d._cache = self._cache.clona()
+        d._logits = self._logits
+        return d
+
+    @property
+    def lunghezza(self) -> int:
+        return self._cache.lunghezza
+
+
+def _genera_blocco_stato(vocab: Vocabolario, dec, ctx: int) -> list[int]:
+    """Free-run del contenuto di un blocco [STATO] (il decoder `dec` ha appena
+    consumato [STATO]).
 
     Genera gruppi `( ... )` finché il modello non emette l'inizio del tick
     successivo — un gruppo con radice diversa da `trovarsi` — o un token che non
     apre un gruppo (token di controllo). Il primo gruppo è l'etichetta di tick
     (`( obl:tempo <ord> )`), accettata comunque; i successivi solo se `trovarsi`.
-    Modifica `ids` in place (appende il blocco) e ritorna gli id generati del
-    contenuto. Deterministico."""
+    Ritorna gli id generati del contenuto; fa avanzare `dec` sui soli token
+    accettati (i rifiutati si scartano con `dec.tronca`). Deterministico e
+    indipendente dal backend (cache o pieno)."""
     id_ap, id_ch = vocab.id(APERTA), vocab.id(CHIUSA)
-    inizio = len(ids)
+    gen: list[int] = []
     n_gruppi = 0
-    while n_gruppi < _MAX_GRUPPI_BLOCCO and len(ids) < ctx:
-        prossimo = _prossimo_id(modello, ids, device)
+    while n_gruppi < _MAX_GRUPPI_BLOCCO and dec.lunghezza < ctx:
+        prossimo = dec.prossimo()
         if prossimo != id_ap:
             break  # non apre un gruppo: il blocco è finito (token non consumato)
-        ids.append(prossimo)  # "("
-        if len(ids) >= ctx:
-            del ids[-1:]
+        dec.alimenta([prossimo]); gen.append(prossimo)  # "("
+        if dec.lunghezza >= ctx:
+            dec.tronca(1); gen.pop()
             break
-        radice_id = _prossimo_id(modello, ids, device)
+        radice_id = dec.prossimo()
         radice = vocab.token(radice_id)
         # Il primo gruppo è l'etichetta di tick (radice obl:tempo), accettata
         # comunque; i successivi solo se posizione (radice trovarsi). Una radice
         # diversa è l'inizio del tick successivo: chiudi il blocco senza
         # includere questo gruppo (bastano "(" e la radice per riconoscerlo).
         if n_gruppi > 0 and radice != VERBO_STATO:
-            del ids[-1:]  # rimuovi il "(" ; la radice non è stata appesa
+            dec.tronca(1); gen.pop()  # rimuovi il "(" ; la radice non è consumata
             break
-        ids.append(radice_id)
+        dec.alimenta([radice_id]); gen.append(radice_id)
         # completa il gruppo bilanciato ("(" apre a profondità 1)
         depth, n_tok = 1, 2
-        while depth > 0 and len(ids) < ctx and n_tok < _MAX_TOKEN_GRUPPO:
-            t = _prossimo_id(modello, ids, device)
-            ids.append(t)
+        while depth > 0 and dec.lunghezza < ctx and n_tok < _MAX_TOKEN_GRUPPO:
+            t = dec.prossimo()
+            dec.alimenta([t]); gen.append(t)
             n_tok += 1
             if t == id_ap:
                 depth += 1
             elif t == id_ch:
                 depth -= 1
         if depth != 0:
-            del ids[len(ids) - n_tok:]  # gruppo non chiuso entro il cap: tronca
+            dec.tronca(n_tok); del gen[len(gen) - n_tok:]  # gruppo non chiuso: tronca
             break
         n_gruppi += 1
-    return ids[inizio:]
+    return gen
+
+
+def _genera_risposta(vocab: Vocabolario, dec, ctx: int) -> list[int]:
+    """Genera la risposta greedy dal decoder (che ha appena consumato [RISPOSTA])
+    fino a [FINE] o al tetto `ctx`. Equivale a `decodifica_greedy` ma sul decoder
+    (con cache: continua dal prefisso senza ricalcolarlo)."""
+    id_fine = vocab.id(FINE)
+    gen: list[int] = []
+    while dec.lunghezza < ctx:
+        t = dec.prossimo()
+        gen.append(t)
+        if t == id_fine:
+            break
+        dec.alimenta([t])
+    return gen
 
 
 def _genera_prefisso_stato(
     modello: Modello, vocab: Vocabolario, storia_flat: list[str], ctx: int, device: str,
-) -> tuple[list[int], list[list[str]]]:
+    backend=_DecoderCache,
+):
     """Free-run interlacciato dei blocchi [STATO] lungo la storia (§5): eventi
     teacher-forced tick per tick, blocco [STATO] generato dal modello a ogni fine
-    tick. Ritorna gli id fino a PRIMA di [DOMANDA] e i blocchi generati (token).
+    tick. Ritorna il DECODER (stato = prefisso storia+stato, fino a prima di
+    [DOMANDA]) e i blocchi generati (token).
 
     Dipende SOLO dalla storia, non dalla domanda: per una storia con più domande
     (l'esame ha fino a `n_per_tipo` esempi per storia) il prefisso si genera una
-    volta e si riusa su tutte — byte-identico, perché la generazione è greedy e
-    deterministica. Presuppone il modello già in `eval()` (lo garantisce il
-    chiamante); avvolto in `no_grad` dai chiamanti."""
-    ids = [vocab.id(STORIA)]
+    volta e il decoder si CLONA su ogni domanda — byte-identico, perché la
+    generazione è greedy e deterministica. `backend` sceglie il motore
+    (`_DecoderCache` in produzione, `_DecoderPieno` come oracolo nei test).
+    Presuppone il modello già in `eval()`; avvolto in `no_grad` dai chiamanti."""
+    dec = backend(modello, device)
+    dec.alimenta([vocab.id(STORIA)])
     blocchi_generati: list[list[str]] = []
     for _tick, eventi_tick in _raggruppa_eventi_per_tick(storia_flat):
         for ev_tok in eventi_tick:  # eventi dati, teacher-forced
-            ids.extend(vocab.id(t) for t in ev_tok)
-        ids.append(vocab.id(STATO))  # cue del blocco (non imparato a emettere)
-        gen = _genera_blocco_stato(modello, vocab, ids, ctx, device)
+            dec.alimenta([vocab.id(t) for t in ev_tok])
+        dec.alimenta([vocab.id(STATO)])  # cue del blocco (non imparato a emettere)
+        gen = _genera_blocco_stato(vocab, dec, ctx)
         blocchi_generati.append([vocab.token(i) for i in gen])
-    return ids, blocchi_generati
+    return dec, blocchi_generati
 
 
 def _completa_risposta_stato(
-    modello: Modello, vocab: Vocabolario, ids_prefisso: list[int],
-    blocchi_generati: list[list[str]], esempio: dict, ctx: int, device: str,
+    vocab: Vocabolario, dec, blocchi_generati: list[list[str]], esempio: dict, ctx: int,
 ) -> EsitoEsempioStato:
-    """Dato il prefisso storia+stato (da `_genera_prefisso_stato`), appende
-    [DOMANDA]+domanda+[RISPOSTA] e decodifica la risposta. MODIFICA `ids_prefisso`
-    in place: chi lo riusa su più domande passa una copia (`list(...)`)."""
-    ids = ids_prefisso
-    ids.append(vocab.id(DOMANDA))
-    ids.extend(vocab.id(t) for t in esempio["domanda"])
-    ids.append(vocab.id(RISPOSTA))
-    generati_ids = decodifica_greedy(modello, vocab, ids, ctx, device)
+    """Dato il decoder col prefisso storia+stato (da `_genera_prefisso_stato`),
+    appende [DOMANDA]+domanda+[RISPOSTA] e decodifica la risposta. FA AVANZARE
+    `dec`: chi lo riusa su più domande passa un clone (`dec.clona()`)."""
+    dec.alimenta([vocab.id(DOMANDA), *(vocab.id(t) for t in esempio["domanda"]), vocab.id(RISPOSTA)])
+    generati_ids = _genera_risposta(vocab, dec, ctx)
 
     generati_token = [vocab.token(i) for i in generati_ids]
     if generati_token and generati_token[-1] == FINE:
@@ -281,7 +370,7 @@ def _completa_risposta_stato(
 
 def valuta_esempio_stato(
     modello: Modello, vocab: Vocabolario, storia_flat: list[str], esempio: dict,
-    ctx: int, device: str,
+    ctx: int, device: str, backend=_DecoderCache,
 ) -> EsitoEsempioStato:
     """Valuta un esempio con decodifica interlacciata (§5): eventi teacher-
     forced tick per tick, blocchi [STATO] generati dal modello, poi la risposta.
@@ -289,12 +378,15 @@ def valuta_esempio_stato(
     generati tornano per la metrica ausiliaria di `esami/diagnosi.py` (§6).
 
     Per un dataset con più domande sulla stessa storia usare `valuta_dataset`
-    (`stato=True`), che genera il prefisso una sola volta per storia."""
+    (`stato=True`), che genera il prefisso una sola volta per storia e lo clona.
+    `backend` sceglie il motore di decodifica (default KV-cache)."""
     era_training = modello.training
     modello.eval()
     with torch.no_grad():
-        ids, blocchi_generati = _genera_prefisso_stato(modello, vocab, storia_flat, ctx, device)
-        esito = _completa_risposta_stato(modello, vocab, ids, blocchi_generati, esempio, ctx, device)
+        dec, blocchi_generati = _genera_prefisso_stato(
+            modello, vocab, storia_flat, ctx, device, backend=backend,
+        )
+        esito = _completa_risposta_stato(vocab, dec, blocchi_generati, esempio, ctx)
     if era_training:
         modello.train()
     return esito
@@ -339,13 +431,13 @@ def valuta_dataset(
     for r in record:
         if stato:
             with torch.no_grad():
-                ids_storia, blocchi = _genera_prefisso_stato(modello, vocab, r["storia"], ctx, device)
+                dec_storia, blocchi = _genera_prefisso_stato(modello, vocab, r["storia"], ctx, device)
         for esempio in r["esempi"]:
             n += 1
             if stato:
                 with torch.no_grad():
                     esito = _completa_risposta_stato(
-                        modello, vocab, list(ids_storia), blocchi, esempio, ctx, device,
+                        vocab, dec_storia.clona(), blocchi, esempio, ctx,
                     )
             else:
                 esito = valuta_esempio(modello, vocab, r["storia"], esempio, ctx, device)

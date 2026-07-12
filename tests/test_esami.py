@@ -927,7 +927,9 @@ class TestValutaEsempioStato:
     def test_interlacciata_stop_su_controllo(self):
         # Il modello genera un blocco per tick e lo chiude emettendo un token di
         # controllo (non "("); gli eventi sono teacher-forced; poi la risposta.
-        from esami.esamina import valuta_esempio_stato
+        # Backend _DecoderPieno: lo stub iniettato assume il ricalcolo pieno (un
+        # forward per token generato), non la cache.
+        from esami.esamina import _DecoderPieno, valuta_esempio_stato
 
         vocab = carica_vocabolario()
         ev1, ev2 = self._storia_due_tick()
@@ -940,7 +942,7 @@ class TestValutaEsempioStato:
         script = blocco1 + ["[DOMANDA]"] + blocco2 + ["[DOMANDA]"] + risposta + ["[FINE]"]
         modello = _ModelloIniettato(vocab, script)
 
-        esito = valuta_esempio_stato(modello, vocab, storia_flat, esempio, ctx=500, device="cpu")
+        esito = valuta_esempio_stato(modello, vocab, storia_flat, esempio, ctx=500, device="cpu", backend=_DecoderPieno)
         assert esito.esatto
         assert esito.token_generati == risposta
         assert esito.blocchi_generati == [blocco1, blocco2]
@@ -948,7 +950,7 @@ class TestValutaEsempioStato:
     def test_interlacciata_stop_su_radice_diversa(self):
         # Dopo le posizioni il modello "inizia il tick successivo" (gruppo con
         # radice != trovarsi): il blocco si chiude e quel gruppo NON è incluso.
-        from esami.esamina import valuta_esempio_stato
+        from esami.esamina import _DecoderPieno, valuta_esempio_stato
 
         vocab = carica_vocabolario()
         ev1, _ = self._storia_due_tick()
@@ -962,7 +964,7 @@ class TestValutaEsempioStato:
         script = blocco1 + stray + risposta + ["[FINE]"]
         modello = _ModelloIniettato(vocab, script)
 
-        esito = valuta_esempio_stato(modello, vocab, ev1, esempio, ctx=500, device="cpu")
+        esito = valuta_esempio_stato(modello, vocab, ev1, esempio, ctx=500, device="cpu", backend=_DecoderPieno)
         assert esito.esatto
         assert esito.blocchi_generati == [blocco1]  # il gruppo stray non è incluso
 
@@ -990,11 +992,38 @@ class TestValutaEsempioStato:
         )
         return Modello(cfg).eval()
 
+    def test_kv_cache_uguale_al_ricalcolo_pieno(self):
+        # Rete di sicurezza della KV-cache: su un modello VERO la decodifica
+        # interlacciata con cache deve dare gli STESSI token (blocchi + risposta)
+        # del ricalcolo pieno (_DecoderPieno == codice pre-cache, oracolo). È il
+        # test che certifica la cache — non eseguibile in locale (gira su Colab).
+        import torch
+        from esami.esamina import (
+            _DecoderCache, _DecoderPieno, _completa_risposta_stato, _genera_prefisso_stato,
+        )
+
+        vocab = carica_vocabolario()
+        modello = self._modello_vero(vocab)
+        ev1, ev2 = self._storia_due_tick()
+        storia_flat = ev1 + ev2
+
+        for es in self._tre_domande():
+            with torch.no_grad():
+                dec_c, bl_c = _genera_prefisso_stato(
+                    modello, vocab, storia_flat, 160, "cpu", backend=_DecoderCache)
+                e_c = _completa_risposta_stato(vocab, dec_c, bl_c, es, 160)
+                dec_p, bl_p = _genera_prefisso_stato(
+                    modello, vocab, storia_flat, 160, "cpu", backend=_DecoderPieno)
+                e_p = _completa_risposta_stato(vocab, dec_p, bl_p, es, 160)
+            assert e_c.blocchi_generati == bl_c == bl_p
+            assert e_c.token_generati == e_p.token_generati
+            assert e_c.categoria == e_p.categoria
+
     def test_riuso_prefisso_stato_uguale_a_indipendente(self):
-        # Guardia sul riuso del prefisso storia+stato: generarlo una volta e
-        # riusarlo (su copia) su più domande deve dare risultati byte-identici
-        # alla valutazione indipendente per esempio. Cattura il leak di stato
-        # (dimenticare la copia del prefisso -> la 2ª domanda vede la 1ª).
+        # Guardia sul riuso: generare il prefisso una volta e clonarne il decoder
+        # su più domande deve dare risultati identici alla valutazione
+        # indipendente per esempio. Cattura il leak di stato (dimenticare
+        # `dec.clona()` -> la 2ª domanda vede la 1ª).
         import torch
         from esami.esamina import (
             _completa_risposta_stato, _genera_prefisso_stato, valuta_esempio_stato,
@@ -1012,17 +1041,12 @@ class TestValutaEsempioStato:
         ]
 
         with torch.no_grad():
-            ids0, blocchi = _genera_prefisso_stato(modello, vocab, storia_flat, ctx=160, device="cpu")
-        ids0_snapshot = list(ids0)
-        for es, rif in zip(esempi, riferimento):
-            with torch.no_grad():
-                esito = _completa_risposta_stato(
-                    modello, vocab, list(ids0), blocchi, es, ctx=160, device="cpu",
-                )
-            assert esito.token_generati == rif.token_generati
-            assert esito.blocchi_generati == rif.blocchi_generati == blocchi
-            assert esito.categoria == rif.categoria
-            assert ids0 == ids0_snapshot  # il prefisso condiviso non è mutato
+            dec0, blocchi = _genera_prefisso_stato(modello, vocab, storia_flat, 160, "cpu")
+            for es, rif in zip(esempi, riferimento):
+                esito = _completa_risposta_stato(vocab, dec0.clona(), blocchi, es, 160)
+                assert esito.token_generati == rif.token_generati
+                assert esito.blocchi_generati == rif.blocchi_generati == blocchi
+                assert esito.categoria == rif.categoria
 
     def test_valuta_dataset_stato_riusa_prefisso_per_storia(self):
         # valuta_dataset(stato=True) su un record multi-domanda deve aggregare
