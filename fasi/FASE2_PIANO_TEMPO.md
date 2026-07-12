@@ -463,3 +463,59 @@ vi compare come linea parallela) e lo «Stato di avanzamento» qui sotto.
   prossima conversazione; nel frattempo la roadmap principale (A2/B/C in
   `FASE2_PIANO_DIAGNOSI.md`) può ripartire tenendo conto di questo
   risultato (§7 di quel piano aggiornato di conseguenza).
+
+- **2026-07-12 (notte): nota aperta CHIUSA — anatomia degli errori dei tipi
+  nuovi (`esami/diagnosi.py`, sezione "tempo", commit `44bab95`).**
+  Estesa la diagnosi ai tre tipi tempo: per ogni errore classifica se il
+  contenuto generato è l'evento/la posizione di un ALTRO tick o luogo
+  (errore di tracking) oppure se il tick è giusto ma verbo/argomenti sono
+  sbagliati (errore di generazione). Esame rigenerato in locale
+  (byte-coerente: 4340 esempi, 137/328 sullo split tracking-tempo come su
+  Colab), diagnosi su `stadio1_best.pt` in locale su CPU (~1,6h — errore di
+  metodo: d'ora in poi ogni job locale stimato >5 min si propone prima ad
+  Andrea con l'alternativa Colab; qui una cella Colab avrebbe impiegato
+  minuti). Differenze CPU/GPU trascurabili (esattezza 0,6265 vs 0,6274 del
+  run Colab: 4 esempi su 4340, tie numerici della greedy).
+
+  Numeri chiave (JSON completo in `dati/risultati/v1_tempo/diagnosi_stadio1.json`):
+
+  | Tipo | Esattezza | Anatomia errori (dominante) |
+  |---|---|---|
+  | `posizione_tempo` | 0,871 | 183/206 = posizione a tick **vicino** (±1-2); finale 13, più-frequente 5, lontano 5 |
+  | `azione_tempo` | 0,318 | **566/1091 = evento di un ALTRO tick** (402 a distanza 1-2); verbo sbagliato 316; solo-origine 88; argomenti 85; struttura 36 |
+  | `azione_luogo` | 0,316 | 24/78 evento di altro luogo; 28 argomenti (sempre `obl:luogo`); verbo giusto in 60/78 (n piccolo) |
+
+  Tre fatti che decidono la lettura:
+
+  1. **`azione_tempo` sui tick di sonno derivato fa 0,889** (n=224, risposta
+     "dorme" mai copiabile da un evento) contro **0,225 sugli eventi
+     copiabili** (n=1376). La complessità del target non spiega nulla:
+     l'esattezza per numero di archi dell'oro NON è monotona (2 archi 0,89;
+     3 archi 0,26; 4 archi 0,19; 5 archi 0,32).
+  2. Gli errori sono concentrati a **distanza 1-2 tick** dal tick chiesto
+     (71% degli "evento di altro tick"; 89% degli errori di
+     `posizione_tempo`).
+  3. Nessun gradiente di recency: l'esattezza è PIATTA rispetto alla
+     distanza dalla coda (posizione_tempo 0,83-0,89 su tutti i bucket,
+     anche ≥6; azione_tempo 0,27-0,34) — il modello legge davvero tutta la
+     storia, non solo la parte fresca.
+
+  **Lettura (smentisce l'ipotesi provvisoria della nota aperta)**: non è il
+  target di generazione complesso — è il **puntatore temporale sfocato**:
+  il modello localizza il quartiere giusto della storia ma non il tick
+  esatto (±1-2). I due risultati per tipo si unificano: dove la risposta è
+  costante su un intorno di tick (la posizione tra un movimento e l'altro,
+  il sonno che dura più tick) il puntatore sfocato basta → 0,87 e 0,89;
+  dove la risposta cambia a ogni tick (l'evento puntuale) lo stesso
+  puntatore fallisce → 0,23. Anche il pattern origine=luogo duplicato (72
+  casi) è coerente: l'origine è la posizione al tick PRECEDENTE, la vittima
+  naturale di un indice impreciso.
+
+  **Conseguenze**: il verdetto di §7 non cambia (il tracking mono-entità si
+  forma; il muro multi-entità è interferenza/binding) ma si affina: la
+  capacità che manca è la **precisione dell'indicizzazione temporale**, non
+  la propagazione dello stato in sé. Rafforza ulteriormente la Fase B
+  (lo stato denso per-tick è esattamente un'àncora d'indice esplicita) e
+  resta coerente con A1 (nessuna head di binding netta: attenzione diffusa
+  = puntatore sfocato). Follow-up opzionale, solo se servirà: anatomia
+  sullo split `tracking-tempo` (cella Colab, non in locale).

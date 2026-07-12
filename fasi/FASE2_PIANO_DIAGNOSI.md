@@ -375,3 +375,16 @@ Andrea.
   da decidere con Andrea** — probabilmente conviene progettare direttamente
   Fase B (supervisione densa dello stato) piuttosto che spendere il run A2,
   ma è una decisione di design sua, non ancora presa.
+
+- **2026-07-12 (notte): chiusa la nota aperta su `azione_tempo`** (dettagli
+  in `fasi/FASE2_PIANO_TEMPO.md` §8, anatomia errori con la nuova sezione
+  "tempo" di `esami/diagnosi.py`): l'ipotesi provvisoria "target di
+  generazione più complesso" è SMENTITA — il 52% degli errori è l'evento di
+  un ALTRO tick (di cui il 71% a distanza 1-2), sui tick di sonno derivato
+  (risposta mai copiabile) il modello fa 0,889, e l'esattezza non dipende
+  dal numero di archi dell'oro. Il collo è la **precisione
+  dell'indicizzazione temporale** (puntatore sfocato ±1-2 tick), non la
+  propagazione dello stato né la complessità della risposta. La lettura
+  sopra (priorità B, poi C2) resta valida e si rafforza: lo stato denso
+  per-tick della Fase B è un'àncora d'indice esplicita; coerente anche con
+  A1 (attenzione diffusa, nessuna head di binding netta).
