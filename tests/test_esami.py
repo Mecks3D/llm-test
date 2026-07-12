@@ -818,3 +818,86 @@ class TestDecodificaGreedy:
         prefisso = [vocab.id(t) for t in ["[STORIA]", "[DOMANDA]", "[RISPOSTA]"]]
         generati = decodifica_greedy(modello, vocab, prefisso, ctx=10, device="cpu")
         assert len(prefisso) + len(generati) == 10
+
+
+# ---------------------------------------------------------------------------
+# Fase B T3: generazione dello stato-oro (fasi/FASE2_PIANO_STATO.md §4)
+# ---------------------------------------------------------------------------
+
+class TestStatoOro:
+    def test_blocchi_stato_oro_coincidono_col_simulatore(self, tmp_path):
+        from mondo.numeri import lemma_numero
+        from mondo.simulatore import genera_storia
+        from esami.genera import _blocchi_stato_oro, _n_tick
+
+        config = _config_piccolo(tmp_path, stato=True)
+        seed = 0
+        n_tick = _n_tick(1, seed, config)
+        storia = genera_storia(seed=seed, n_tick=n_tick, persone=None)
+        blocchi = _blocchi_stato_oro(seed, n_tick, None, storia)
+
+        tick_con_eventi = sorted({e.t for e in storia.eventi})
+        assert sorted(blocchi) == tick_con_eventi
+        cast_ids = [p.id for p in dm.PERSONE]
+        for t, (tick_lemma, posizioni) in blocchi.items():
+            assert tick_lemma == lemma_numero(t)
+            # una posizione per persona del cast, nell'ordine del cast
+            assert [pid for pid, _ in posizioni] == cast_ids
+            # ogni posizione == stato del simulatore troncato al tick t (§1.9)
+            atteso = genera_storia(seed=seed, n_tick=t, persone=None).stato_finale
+            for pid, luogo in posizioni:
+                assert luogo == atteso.luogo_effettivo(pid)
+
+    def test_record_train_interlaccia_lo_stato(self, tmp_path):
+        from mondo.simulatore import genera_storia
+        from esami.genera import _blocchi_stato_oro, _n_tick
+        from cervello.sequenza import analizza_esempio_stato, grafo_posizione
+
+        config = _config_piccolo(tmp_path, stato=True)
+        seed = 0
+        record = genera_record(1, seed, config, split="train")
+        assert "[STATO]" in record["storia"]
+
+        n_tick = _n_tick(1, seed, config)
+        storia = genera_storia(seed=seed, n_tick=n_tick, persone=None)
+        blocchi = _blocchi_stato_oro(seed, n_tick, None, storia)
+
+        # ricompongo un esempio e lo analizzo: i blocchi combaciano con l'oro
+        esempio = record["esempi"][0]
+        seq = componi_esempio([record["storia"]], esempio["domanda"], esempio["risposta"])
+        analizzato = analizza_esempio_stato(seq)
+        assert len(analizzato.segmenti) == len(blocchi)
+        for (_, blocco), t in zip(analizzato.segmenti, sorted(blocchi)):
+            tick_lemma, posizioni = blocchi[t]
+            assert blocco.tick_lemma == tick_lemma
+            assert list(blocco.posizioni) == [grafo_posizione(pid, luogo) for pid, luogo in posizioni]
+
+    def test_stato_oro_coincide_su_300_storie(self, tmp_path):
+        # Cancello T3: stato-oro == simulatore su 300 storie campione. Ogni
+        # persona ha sempre una posizione (mai None, anche senza aver agito).
+        from mondo.simulatore import genera_storia
+        from esami.genera import _blocchi_stato_oro, _n_tick
+
+        config = _config_piccolo(tmp_path, stato=True)
+        for seed in range(300):
+            n_tick = _n_tick(1, seed, config)
+            storia = genera_storia(seed=seed, n_tick=n_tick, persone=None)
+            blocchi = _blocchi_stato_oro(seed, n_tick, None, storia)
+            for t, (_, posizioni) in blocchi.items():
+                atteso = genera_storia(seed=seed, n_tick=t, persone=None).stato_finale
+                for pid, luogo in posizioni:
+                    assert luogo is not None, f"seed {seed} tick {t}: {pid} senza posizione"
+                    assert luogo == atteso.luogo_effettivo(pid), f"seed {seed} tick {t} {pid}"
+
+    def test_dev_ed_esame_restano_senza_stato(self, tmp_path):
+        config = _config_piccolo(tmp_path, stato=True)
+        for split, seed in (("dev", 800_000), ("esame", 1_000_000)):
+            record = genera_record(1, seed, config, split=split)
+            assert "[STATO]" not in record["storia"]
+
+    def test_default_senza_stato_byte_identico(self, tmp_path):
+        seed = 0
+        senza_chiave = genera_record(1, seed, _config_piccolo(tmp_path), split="train")
+        con_false = genera_record(1, seed, _config_piccolo(tmp_path, stato=False), split="train")
+        assert senza_chiave == con_false
+        assert "[STATO]" not in senza_chiave["storia"]

@@ -24,10 +24,10 @@ from mondo import dati_mondo as dm
 from mondo.domande import Domanda, genera_domande, genera_domande_tempo
 from mondo.generatore import _lunghezza_storia
 from mondo.grafo import NON_LO_SO, Grafo, evento_a_grafo
-from mondo.numeri import VALORE_A_LEMMA
+from mondo.numeri import VALORE_A_LEMMA, lemma_numero
 from mondo.simulatore import Storia, genera_storia
 
-from cervello.sequenza import componi_esempio, grafo_a_token
+from cervello.sequenza import blocco_stato_a_token, componi_esempio, grafo_a_token
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 _PERCORSO_CONFIG_DEFAULT = PROJECT_ROOT / "configs" / "v1.yaml"
@@ -258,6 +258,53 @@ def _componi_e_valida(
     return {"tipo": tipo, "domanda": tok_domanda, "risposta": tok_risposta}
 
 
+def _blocchi_stato_oro(
+    seed: int, n_tick: int, cast: tuple[dm.Persona, ...] | None, storia: Storia,
+) -> dict[int, tuple[str, list[tuple[str, str]]]]:
+    """Stato-oro per ogni tick con eventi (Fase B, fasi/FASE2_PIANO_STATO.md §4).
+
+    Per ogni tick in cui è successo qualcosa, la posizione EFFETTIVA di ciascuna
+    persona del cast a fine tick — inclusa la posizione iniziale di chi non ha
+    ancora agito. Fonte: lo stato del simulatore troncato al tick t
+    (`stato_finale.luogo_effettivo`), la semantica già verificata dal piano
+    tempo (§1.7, riusata da §1.9): rieseguire la storia troncata è il prefisso
+    esatto di quella piena (stesso seed, motore deterministico). Ordine
+    deterministico = ordine del cast (`dm.PERSONE` o il sottoinsieme del
+    config), non l'ordine di menzione.
+
+    Ritorna `{tick: (lemma_ordinale, [(persona, luogo), ...])}`.
+    """
+    persone_cast = cast if cast is not None else dm.PERSONE
+    cast_ids = [p.id for p in persone_cast]
+    tick_con_eventi = sorted({e.t for e in storia.eventi})
+    blocchi: dict[int, tuple[str, list[tuple[str, str]]]] = {}
+    for t in tick_con_eventi:
+        stato_t = genera_storia(seed=seed, n_tick=t, persone=cast).stato_finale
+        posizioni = [(pid, stato_t.luogo_effettivo(pid)) for pid in cast_ids]
+        blocchi[t] = (lemma_numero(t), posizioni)
+    return blocchi
+
+
+def _token_storia_con_stato(
+    storia: Storia, blocchi: dict[int, tuple[str, list[tuple[str, str]]]],
+) -> list[list[str]]:
+    """Sequenza-storia con i blocchi [STATO] interlacciati: per ogni tick, gli
+    eventi del tick seguiti dal blocco stato di fine tick. Ritorna una lista di
+    token-list (eventi e blocchi come elementi separati), pronta per
+    `componi_esempio`/`_componi_e_valida`: concatenandola si ottiene la storia
+    interlacciata."""
+    token_storia: list[list[str]] = []
+    tick_corrente: int | None = None
+    for e in storia.eventi:
+        if tick_corrente is not None and e.t != tick_corrente:
+            token_storia.append(blocco_stato_a_token(*blocchi[tick_corrente]))
+        token_storia.append(grafo_a_token(evento_a_grafo(e)))
+        tick_corrente = e.t
+    if tick_corrente is not None:
+        token_storia.append(blocco_stato_a_token(*blocchi[tick_corrente]))
+    return token_storia
+
+
 def genera_record(
     stadio: int, seed: int, config: dict, *, split: str = "train",
     troncamento: int | None = None,
@@ -276,8 +323,19 @@ def genera_record(
     ctx = ds["ctx"]
 
     n_tick = troncamento if troncamento is not None else _n_tick(stadio, seed, config)
-    storia = genera_storia(seed=seed, n_tick=n_tick, persone=_cast_per_seed(config, seed))
-    token_eventi = [grafo_a_token(evento_a_grafo(e)) for e in storia.eventi]
+    cast = _cast_per_seed(config, seed)
+    storia = genera_storia(seed=seed, n_tick=n_tick, persone=cast)
+
+    # Fase B (fasi/FASE2_PIANO_STATO.md §4): supervisione densa in-sequenza,
+    # SOLO nel train. La storia si interlaccia con un blocco [STATO] a fine di
+    # ogni tick con eventi; dev/esame restano la distribuzione ufficiale senza
+    # stato (byte-identico quando dataset.stato è assente).
+    stato_attivo = split == "train" and ds.get("stato", False)
+    if stato_attivo:
+        blocchi = _blocchi_stato_oro(seed, n_tick, cast, storia)
+        token_eventi = _token_storia_con_stato(storia, blocchi)
+    else:
+        token_eventi = [grafo_a_token(evento_a_grafo(e)) for e in storia.eventi]
     storia_flat = [t for tok in token_eventi for t in tok]
 
     anti_cfg = ds.get("anti_scorciatoia") if split == "train" else None
