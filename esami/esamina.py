@@ -18,7 +18,17 @@ import torch
 from mondo.grafo import NON_LO_SO, Grafo
 
 from cervello.modello import ConfigModello, Modello
-from cervello.sequenza import DOMANDA, FINE, RISPOSTA, STORIA, token_a_grafo
+from cervello.sequenza import (
+    APERTA,
+    CHIUSA,
+    DOMANDA,
+    FINE,
+    RISPOSTA,
+    STATO,
+    STORIA,
+    VERBO_STATO,
+    token_a_grafo,
+)
 from cervello.vocabolario import Vocabolario, carica_vocabolario
 
 from .genera import PROJECT_ROOT, carica_config, percorso_dataset
@@ -33,6 +43,13 @@ def dispositivo(config: dict) -> str:
     return d
 
 
+def _prossimo_id(modello: Modello, ids: list[int], device: str) -> int:
+    """Argmax del token successivo dato il contesto `ids` (greedy, deterministico)."""
+    x = torch.tensor([ids], dtype=torch.long, device=device)
+    logits = modello(x)
+    return int(torch.argmax(logits[0, -1]).item())
+
+
 def decodifica_greedy(
     modello: Modello, vocab: Vocabolario, ids_prefisso: list[int], ctx: int, device: str,
 ) -> list[int]:
@@ -44,9 +61,7 @@ def decodifica_greedy(
     ids = list(ids_prefisso)
     with torch.no_grad():
         while len(ids) < ctx:
-            x = torch.tensor([ids], dtype=torch.long, device=device)
-            logits = modello(x)
-            prossimo = int(torch.argmax(logits[0, -1]).item())
+            prossimo = _prossimo_id(modello, ids, device)
             ids.append(prossimo)
             if prossimo == id_fine:
                 break
@@ -102,6 +117,161 @@ def valuta_esempio(
     )
 
 
+# ---------------------------------------------------------------------------
+# Fase B: decodifica interlacciata d'esame (fasi/FASE2_PIANO_STATO.md §5)
+#
+# All'esame i blocchi [STATO] li GENERA il modello (decisione 1): l'esame non è
+# più un singolo decode dopo [RISPOSTA] ma un decode interlacciato — eventi
+# teacher-forced tick per tick, e a ogni confine il modello genera in free-run
+# il blocco di stato, che si appende al contesto. La domanda resta dopo la
+# storia, la risposta si genera come sempre.
+# ---------------------------------------------------------------------------
+
+# Cap difensivi: il vero stop del blocco è la radice != trovarsi (inizio del
+# tick successivo) o un token di controllo. Questi limiti evitano solo che un
+# modello mai addestrato generi all'infinito (cancello T4: forma, non qualità).
+_MAX_GRUPPI_BLOCCO = 16       # etichetta di tick + posizioni (cast pieno = 6)
+_MAX_TOKEN_GRUPPO = 24        # ( trovarsi ( nsubj p ) ( obl:luogo l ) ) = 11
+
+
+@dataclass(frozen=True)
+class EsitoEsempioStato:
+    tipo: str
+    categoria: str
+    esatto: bool
+    token_generati: list[str]
+    blocchi_generati: list[list[str]]  # token generati per ogni blocco [STATO]
+
+
+def _raggruppa_eventi_per_tick(storia_flat: list[str]) -> list[tuple[str, list[list[str]]]]:
+    """Divide la storia-eventi (piatta, senza stato — la distribuzione d'esame
+    ufficiale) nei suoi grafi-evento e li raggruppa per tick, nell'ordine della
+    storia. Il tick è il lemma di `obl:tempo` dell'evento. Ritorna
+    `[(tick_lemma, [evento_token, ...]), ...]`."""
+    eventi: list[list[str]] = []
+    i, n = 0, len(storia_flat)
+    while i < n:
+        if storia_flat[i] != APERTA:
+            raise ValueError(f"atteso {APERTA!r} all'inizio di un evento, trovato {storia_flat[i]!r}")
+        depth, j = 0, i
+        while j < n:
+            if storia_flat[j] == APERTA:
+                depth += 1
+            elif storia_flat[j] == CHIUSA:
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if depth != 0:
+            raise ValueError("evento con parentesi non chiusa nella storia")
+        eventi.append(storia_flat[i : j + 1])
+        i = j + 1
+
+    per_tick: list[tuple[str, list[list[str]]]] = []
+    for ev in eventi:
+        tick = ev[ev.index("obl:tempo") + 1]
+        if per_tick and per_tick[-1][0] == tick:
+            per_tick[-1][1].append(ev)
+        else:
+            per_tick.append((tick, [ev]))
+    return per_tick
+
+
+def _genera_blocco_stato(
+    modello: Modello, vocab: Vocabolario, ids: list[int], ctx: int, device: str,
+) -> list[int]:
+    """Free-run del contenuto di un blocco [STATO] (`ids` termina con [STATO]).
+
+    Genera gruppi `( ... )` finché il modello non emette l'inizio del tick
+    successivo — un gruppo con radice diversa da `trovarsi` — o un token che non
+    apre un gruppo (token di controllo). Il primo gruppo è l'etichetta di tick
+    (`( obl:tempo <ord> )`), accettata comunque; i successivi solo se `trovarsi`.
+    Modifica `ids` in place (appende il blocco) e ritorna gli id generati del
+    contenuto. Deterministico."""
+    id_ap, id_ch = vocab.id(APERTA), vocab.id(CHIUSA)
+    inizio = len(ids)
+    n_gruppi = 0
+    while n_gruppi < _MAX_GRUPPI_BLOCCO and len(ids) < ctx:
+        prossimo = _prossimo_id(modello, ids, device)
+        if prossimo != id_ap:
+            break  # non apre un gruppo: il blocco è finito (token non consumato)
+        ids.append(prossimo)  # "("
+        if len(ids) >= ctx:
+            del ids[-1:]
+            break
+        radice_id = _prossimo_id(modello, ids, device)
+        radice = vocab.token(radice_id)
+        # Il primo gruppo è l'etichetta di tick (radice obl:tempo), accettata
+        # comunque; i successivi solo se posizione (radice trovarsi). Una radice
+        # diversa è l'inizio del tick successivo: chiudi il blocco senza
+        # includere questo gruppo (bastano "(" e la radice per riconoscerlo).
+        if n_gruppi > 0 and radice != VERBO_STATO:
+            del ids[-1:]  # rimuovi il "(" ; la radice non è stata appesa
+            break
+        ids.append(radice_id)
+        # completa il gruppo bilanciato ("(" apre a profondità 1)
+        depth, n_tok = 1, 2
+        while depth > 0 and len(ids) < ctx and n_tok < _MAX_TOKEN_GRUPPO:
+            t = _prossimo_id(modello, ids, device)
+            ids.append(t)
+            n_tok += 1
+            if t == id_ap:
+                depth += 1
+            elif t == id_ch:
+                depth -= 1
+        if depth != 0:
+            del ids[len(ids) - n_tok:]  # gruppo non chiuso entro il cap: tronca
+            break
+        n_gruppi += 1
+    return ids[inizio:]
+
+
+def valuta_esempio_stato(
+    modello: Modello, vocab: Vocabolario, storia_flat: list[str], esempio: dict,
+    ctx: int, device: str,
+) -> EsitoEsempioStato:
+    """Valuta un esempio con decodifica interlacciata (§5): eventi teacher-
+    forced tick per tick, blocchi [STATO] generati dal modello, poi la risposta.
+    Metrica primaria invariata (risposta finale, grafo vs grafo); i blocchi
+    generati tornano per la metrica ausiliaria di `esami/diagnosi.py` (§6)."""
+    era_training = modello.training
+    modello.eval()
+
+    ids = [vocab.id(STORIA)]
+    blocchi_generati: list[list[str]] = []
+    with torch.no_grad():
+        for _tick, eventi_tick in _raggruppa_eventi_per_tick(storia_flat):
+            for ev_tok in eventi_tick:  # eventi dati, teacher-forced
+                ids.extend(vocab.id(t) for t in ev_tok)
+            ids.append(vocab.id(STATO))  # cue del blocco (non imparato a emettere)
+            gen = _genera_blocco_stato(modello, vocab, ids, ctx, device)
+            blocchi_generati.append([vocab.token(i) for i in gen])
+
+        ids.append(vocab.id(DOMANDA))
+        ids.extend(vocab.id(t) for t in esempio["domanda"])
+        ids.append(vocab.id(RISPOSTA))
+        generati_ids = decodifica_greedy(modello, vocab, ids, ctx, device)
+
+    if era_training:
+        modello.train()
+
+    generati_token = [vocab.token(i) for i in generati_ids]
+    if generati_token and generati_token[-1] == FINE:
+        generati_token = generati_token[:-1]
+
+    grafo_oro = token_a_grafo(esempio["risposta"], "fatto")
+    try:
+        grafo_generato = token_a_grafo(generati_token, "fatto")
+    except ValueError:
+        grafo_generato = None
+
+    categoria = _categoria(grafo_oro, grafo_generato)
+    return EsitoEsempioStato(
+        tipo=esempio["tipo"], categoria=categoria, esatto=categoria == "esatto",
+        token_generati=generati_token, blocchi_generati=blocchi_generati,
+    )
+
+
 def campiona_per_valutazione(record: list[dict], n: int, rng: random.Random) -> list[dict]:
     """Campiona `n` (storia, esempio) da `record`, restituiti come record a
     un solo esempio (stesso formato di `esami/genera.py`, riusabile da
@@ -116,12 +286,17 @@ MAX_CAMPIONI_NON_ESATTI = 10
 
 def valuta_dataset(
     modello: Modello, vocab: Vocabolario, record: list[dict], ctx: int, device: str,
+    stato: bool = False,
 ) -> dict[str, Any]:
     """Valuta un intero dataset (dev o esame). Ritorna un dict JSON-
     serializzabile con esattezza totale/per tipo, conteggi di calibrazione
     (invenzioni, astensioni_errate, malformate — PROGETTO.md, onestà
     epistemica) e i primi campioni non esatti (token generati vs oro,
-    per diagnosi: le malformate si guardano, non si indovinano)."""
+    per diagnosi: le malformate si guardano, non si indovinano).
+
+    `stato=True` (Fase B): decodifica interlacciata (§5), il modello genera i
+    blocchi [STATO] lungo la storia prima di rispondere. Default False:
+    comportamento invariato, byte-identico."""
     totali = {c: 0 for c in CATEGORIE}
     per_tipo: dict[str, dict[str, int]] = {}
     campioni_non_esatti: list[dict] = []
@@ -130,7 +305,10 @@ def valuta_dataset(
     for r in record:
         for esempio in r["esempi"]:
             n += 1
-            esito = valuta_esempio(modello, vocab, r["storia"], esempio, ctx, device)
+            if stato:
+                esito = valuta_esempio_stato(modello, vocab, r["storia"], esempio, ctx, device)
+            else:
+                esito = valuta_esempio(modello, vocab, r["storia"], esempio, ctx, device)
             totali[esito.categoria] += 1
             d = per_tipo.setdefault(esito.tipo, {c: 0 for c in CATEGORIE} | {"n": 0})
             d[esito.categoria] += 1
@@ -184,7 +362,8 @@ def _cli() -> None:
     modello = _carica_modello(config, args.checkpoint, device)
 
     record = _carica_record(percorso_dataset(args.stadio, "esame", config))
-    esito = valuta_dataset(modello, vocab, record, config["dataset"]["ctx"], device)
+    stato = config["dataset"].get("stato", False)
+    esito = valuta_dataset(modello, vocab, record, config["dataset"]["ctx"], device, stato=stato)
 
     dir_risultati = PROJECT_ROOT / config["percorsi"]["risultati_dir"] / config["nome_run"]
     dir_risultati.mkdir(parents=True, exist_ok=True)

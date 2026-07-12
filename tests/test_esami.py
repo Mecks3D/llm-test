@@ -901,3 +901,67 @@ class TestStatoOro:
         con_false = genera_record(1, seed, _config_piccolo(tmp_path, stato=False), split="train")
         assert senza_chiave == con_false
         assert "[STATO]" not in senza_chiave["storia"]
+
+
+@pytest.mark.torch
+class TestValutaEsempioStato:
+    """Fase B T4: decodifica interlacciata d'esame (fasi/FASE2_PIANO_STATO.md §5)."""
+
+    def _storia_due_tick(self):
+        ev1 = grafo_a_token(grafo_fatto("andare", nsubj="sara", **{"obl:luogo": "cucina", "obl:tempo": "uno"}))
+        ev2 = grafo_a_token(grafo_fatto("andare", nsubj="sara", **{"obl:luogo": "giardino", "obl:tempo": "due"}))
+        return ev1, ev2
+
+    def _posizione(self, luogo):
+        return grafo_a_token(grafo_fatto("trovarsi", nsubj="sara", **{"obl:luogo": luogo}))
+
+    def test_raggruppa_eventi_per_tick(self):
+        from esami.esamina import _raggruppa_eventi_per_tick
+
+        ev1, ev2 = self._storia_due_tick()
+        per_tick = _raggruppa_eventi_per_tick(ev1 + ev2)
+        assert [t for t, _ in per_tick] == ["uno", "due"]
+        assert per_tick[0][1] == [ev1]
+        assert per_tick[1][1] == [ev2]
+
+    def test_interlacciata_stop_su_controllo(self):
+        # Il modello genera un blocco per tick e lo chiude emettendo un token di
+        # controllo (non "("); gli eventi sono teacher-forced; poi la risposta.
+        from esami.esamina import valuta_esempio_stato
+
+        vocab = carica_vocabolario()
+        ev1, ev2 = self._storia_due_tick()
+        storia_flat = ev1 + ev2
+        risposta = grafo_a_token(grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "giardino"}))
+        esempio = {"tipo": "posizione", "domanda": grafo_a_token(grafo_fatto("trovarsi", nsubj="sara", quesito="dove")), "risposta": risposta}
+
+        blocco1 = ["(", "obl:tempo", "uno", ")"] + self._posizione("cucina")
+        blocco2 = ["(", "obl:tempo", "due", ")"] + self._posizione("giardino")
+        script = blocco1 + ["[DOMANDA]"] + blocco2 + ["[DOMANDA]"] + risposta + ["[FINE]"]
+        modello = _ModelloIniettato(vocab, script)
+
+        esito = valuta_esempio_stato(modello, vocab, storia_flat, esempio, ctx=500, device="cpu")
+        assert esito.esatto
+        assert esito.token_generati == risposta
+        assert esito.blocchi_generati == [blocco1, blocco2]
+
+    def test_interlacciata_stop_su_radice_diversa(self):
+        # Dopo le posizioni il modello "inizia il tick successivo" (gruppo con
+        # radice != trovarsi): il blocco si chiude e quel gruppo NON è incluso.
+        from esami.esamina import valuta_esempio_stato
+
+        vocab = carica_vocabolario()
+        ev1, _ = self._storia_due_tick()
+        risposta = grafo_a_token(grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"}))
+        esempio = {"tipo": "posizione", "domanda": grafo_a_token(grafo_fatto("trovarsi", nsubj="sara", quesito="dove")), "risposta": risposta}
+
+        blocco1 = ["(", "obl:tempo", "uno", ")"] + self._posizione("cucina")
+        # la decodifica riconosce l'inizio del tick successivo dopo "(" + radice:
+        # bastano questi due token perché il blocco si chiuda scartandoli.
+        stray = ["(", "andare"]
+        script = blocco1 + stray + risposta + ["[FINE]"]
+        modello = _ModelloIniettato(vocab, script)
+
+        esito = valuta_esempio_stato(modello, vocab, ev1, esempio, ctx=500, device="cpu")
+        assert esito.esatto
+        assert esito.blocchi_generati == [blocco1]  # il gruppo stray non è incluso
