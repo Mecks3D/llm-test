@@ -13,7 +13,7 @@ import pytest
 
 torch = pytest.importorskip("torch")
 
-from mondo.grafo import grafo_fatto
+from mondo.grafo import Grafo, evento_a_grafo, grafo_fatto
 from mondo.simulatore import Storia
 from mondo.tipi import Evento, StatoMondo, StatoPersona
 
@@ -225,3 +225,131 @@ class TestEseguiDiagnosiTrackingTempo:
         assert esito["n_posizione_oro_noto"] == 0
         assert esito["per_entita"] == {}
         assert esito["anatomia_errori"] == {}
+        # sezione "tempo": popolata (astensione_errata entra in n_oro_noto,
+        # niente anatomia perché non è categoria "errore").
+        assert esito["tempo"]["posizione_tempo"]["n_oro_noto"] == 1
+        assert esito["tempo"]["posizione_tempo"]["anatomia_errori"] == {}
+
+
+def _grafo_evento_test(evento: Evento, *, con_tempo: bool = True) -> list[str]:
+    g = evento_a_grafo(evento)
+    if not con_tempo:
+        g = Grafo(nodi=g.nodi[:-1], archi=g.archi[:-1])
+    return grafo_a_token(g)
+
+
+@pytest.mark.torch
+class TestEseguiDiagnosiSezioneTempo:
+    """Anatomia degli errori dei tipi "tempo" (nota aperta di
+    FASE2_PIANO_TEMPO.md §8): errori di tracking (contenuto di un altro
+    tick/luogo) vs errori di generazione (verbo/argomenti sbagliati),
+    verificata su esiti costruiti a mano sopra `_STORIA_TEMPO` (5 tick,
+    `storie_corte: {min: 5, max: 5}` così `n_tick` è deterministico)."""
+
+    _CONFIG = {
+        "stadi": {1: {"tipi": ["posizione_tempo", "azione_tempo", "azione_luogo"], "soglia": 0.95,
+                      "storie_corte": {"min": 5, "max": 5}}},
+        "dataset": {},
+    }
+
+    def _esegui(self, monkeypatch, record, risposte):
+        monkeypatch.setattr(diagnosi_mod, "genera_storia", lambda seed, n_tick, persone: _STORIA_TEMPO)
+        vocab = carica_vocabolario()
+        modello = _ModelloMultiRisposta(vocab, [[*r, "[FINE]"] for r in risposte])
+        return diagnosi_mod.esegui_diagnosi(
+            modello, vocab, record, self._CONFIG, stadio=1, ctx=200, device="cpu",
+        )
+
+    def test_posizione_tempo_tick_vicino_e_distanza_coda(self, monkeypatch):
+        # t=4 (oro salotto): il modello risponde cucina = posizione a t=3
+        # -> "posizione_tick_vicino", distanza tick 1. t=2 (oro orto): esatto.
+        dom4 = grafo_a_token(grafo_fatto("trovarsi", nsubj="anna", **{"obl:tempo": "quattro"}, quesito="dove"))
+        ris4 = grafo_a_token(grafo_fatto("essere", nsubj="anna", **{"obl:luogo": "salotto", "obl:tempo": "quattro"}))
+        gen4 = grafo_a_token(grafo_fatto("essere", nsubj="anna", **{"obl:luogo": "cucina", "obl:tempo": "quattro"}))
+        dom2 = grafo_a_token(grafo_fatto("trovarsi", nsubj="anna", **{"obl:tempo": "due"}, quesito="dove"))
+        ris2 = grafo_a_token(grafo_fatto("essere", nsubj="anna", **{"obl:luogo": "orto", "obl:tempo": "due"}))
+        record = [
+            {"seed": 300, "storia": [], "esempi": [{"tipo": "posizione_tempo", "domanda": dom4, "risposta": ris4}]},
+            {"seed": 300, "storia": [], "esempi": [{"tipo": "posizione_tempo", "domanda": dom2, "risposta": ris2}]},
+        ]
+        esito = self._esegui(monkeypatch, record, [gen4, ris2])
+
+        sezione = esito["tempo"]["posizione_tempo"]
+        assert sezione["n_oro_noto"] == 2
+        assert sezione["esattezza"] == pytest.approx(0.5)
+        assert sezione["anatomia_errori"] == {"posizione_tick_vicino": 1}
+        assert sezione["distanza_tick_generato"] == {"1-2": 1}
+        # distanza dalla coda: t=4 -> n_tick-t=1 ("1-2", errore); t=2 -> 3 ("3-5", esatto)
+        assert sezione["per_distanza_coda"]["1-2"] == {"esattezza": pytest.approx(0.0), "n": 1}
+        assert sezione["per_distanza_coda"]["3-5"] == {"esattezza": pytest.approx(1.0), "n": 1}
+
+    def test_azione_tempo_altro_tick_origine_verbo(self, monkeypatch):
+        eventi = _STORIA_TEMPO.eventi
+        # t=3: il modello genera il contenuto dell'evento di t=4 (con il
+        # tempo della domanda) -> "evento_di_altro_tick", distanza 1.
+        dom3 = grafo_a_token(grafo_fatto("fare", nsubj="anna", **{"obl:tempo": "tre"}, quesito="che-cosa"))
+        ris3 = _grafo_evento_test(eventi[2])
+        gen3 = grafo_a_token(grafo_fatto(
+            "andare", nsubj="anna", **{"obl:origine": "cucina", "obl:luogo": "salotto", "obl:tempo": "tre"},
+        ))
+        # t=2: tutto giusto tranne obl:origine, duplicata sul luogo generato
+        # -> "solo_origine_sbagliata" + origine_uguale_luogo_generato.
+        dom2 = grafo_a_token(grafo_fatto("fare", nsubj="anna", **{"obl:tempo": "due"}, quesito="che-cosa"))
+        ris2 = _grafo_evento_test(eventi[1])
+        gen2 = grafo_a_token(grafo_fatto(
+            "andare", nsubj="anna", **{"obl:origine": "orto", "obl:luogo": "orto", "obl:tempo": "due"},
+        ))
+        # t=5: verbo sbagliato ("dormire" invece di "andare").
+        dom5 = grafo_a_token(grafo_fatto("fare", nsubj="anna", **{"obl:tempo": "cinque"}, quesito="che-cosa"))
+        ris5 = _grafo_evento_test(eventi[4])
+        gen5 = grafo_a_token(grafo_fatto("dormire", nsubj="anna", **{"obl:tempo": "cinque"}))
+        record = [
+            {"seed": 300, "storia": [], "esempi": [{"tipo": "azione_tempo", "domanda": dom3, "risposta": ris3}]},
+            {"seed": 300, "storia": [], "esempi": [{"tipo": "azione_tempo", "domanda": dom2, "risposta": ris2}]},
+            {"seed": 300, "storia": [], "esempi": [{"tipo": "azione_tempo", "domanda": dom5, "risposta": ris5}]},
+        ]
+        esito = self._esegui(monkeypatch, record, [gen3, gen2, gen5])
+
+        sezione = esito["tempo"]["azione_tempo"]
+        assert sezione["n_oro_noto"] == 3
+        assert sezione["esattezza"] == pytest.approx(0.0)
+        assert sezione["anatomia_errori"] == {
+            "evento_di_altro_tick": 1, "solo_origine_sbagliata": 1, "verbo_sbagliato": 1,
+        }
+        assert sezione["distanza_tick_generato"] == {"1-2": 1}
+        assert sezione["errori_verbo_giusto"] == 2  # gen3 e gen2 ("andare")
+        assert sezione["origine_uguale_luogo_generato"] == 1
+        # oro: tutti eventi copiabili (nessun "dorme" derivato), 4 archi ciascuno
+        assert sezione["per_oro"]["evento"] == {"esattezza": pytest.approx(0.0), "n": 3}
+        assert sezione["per_oro"]["dormire_derivato"] == {"esattezza": 0.0, "n": 0}
+        assert sezione["per_n_archi_oro"] == {"4": {"esattezza": pytest.approx(0.0), "n": 3}}
+
+    def test_azione_luogo_evento_di_altro_luogo(self, monkeypatch):
+        eventi = _STORIA_TEMPO.eventi
+        # luogo chiesto "orto" (oro = evento t=2 senza tempo): il modello
+        # genera l'evento di t=3 senza tempo (luogo cucina != orto).
+        dom = grafo_a_token(grafo_fatto("fare", nsubj="anna", **{"obl:luogo": "orto"}, quesito="che-cosa"))
+        ris = _grafo_evento_test(eventi[1], con_tempo=False)
+        gen = _grafo_evento_test(eventi[2], con_tempo=False)
+        record = [{"seed": 300, "storia": [], "esempi": [{"tipo": "azione_luogo", "domanda": dom, "risposta": ris}]}]
+        esito = self._esegui(monkeypatch, record, [gen])
+
+        sezione = esito["tempo"]["azione_luogo"]
+        assert sezione["n_oro_noto"] == 1
+        assert sezione["anatomia_errori"] == {"evento_di_altro_luogo": 1}
+        assert sezione["errori_verbo_giusto"] == 1
+        assert sezione["luogo_richiesto_nel_generato"] == 0
+        assert sezione["per_n_archi_oro"] == {"3": {"esattezza": pytest.approx(0.0), "n": 1}}
+        # "azione_luogo" non ha metriche legate al tick
+        assert "per_distanza_coda" not in sezione
+        assert "per_oro" not in sezione
+
+    def test_run_senza_tipi_tempo_sezione_vuota(self, monkeypatch):
+        monkeypatch.setattr(diagnosi_mod, "genera_storia", lambda seed, n_tick, persone: _STORIE[100])
+        vocab = carica_vocabolario()
+        dom, ris = _domanda_e_risposta("piero", "giardino")
+        record = [{"seed": 100, "storia": [], "esempi": [{"tipo": "posizione", "domanda": dom, "risposta": ris}]}]
+        modello = _ModelloMultiRisposta(vocab, [[*ris, "[FINE]"]])
+        config = {"stadi": {1: {"tipi": ["posizione"], "soglia": 0.95, "storie_corte": True}}, "dataset": {}}
+        esito = diagnosi_mod.esegui_diagnosi(modello, vocab, record, config, stadio=1, ctx=200, device="cpu")
+        assert esito["tempo"] == {}
