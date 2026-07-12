@@ -46,4 +46,6 @@ training:
   grad_clip: 1.0
   max_step: 8000
   intervallo_valutazione: 500
-  dev_campione: 200
+  dev_campione: 40   # dev = proxy della curva; il decode interlacciato è caro e la
+                     # dev campiona storie sparse (niente riuso prefisso). Il numero
+                     # UFFICIALE è l'esame pieno (esame_storie, con riuso per-storia).

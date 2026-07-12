@@ -16,9 +16,9 @@ percorsi:
 
 dataset:
   ctx: 3072
-  train_storie: 300
-  dev_storie: 300
-  esame_storie: 300
+  train_storie: 100
+  dev_storie: 40
+  esame_storie: 40      # >1 domanda/storia: esercita il riuso del prefisso stato
   n_per_tipo: 8
   stato: true
 
@@ -44,6 +44,6 @@ training:
   weight_decay: 0.1
   warmup_step: 200
   grad_clip: 1.0
-  max_step: 600
-  intervallo_valutazione: 200
-  dev_campione: 200
+  max_step: 150               # fumo: la prima riga (e il costo dell'eval) arriva presto
+  intervallo_valutazione: 50
+  dev_campione: 8             # dev interlacciata piccola: lo smoke misura il costo, non la qualità

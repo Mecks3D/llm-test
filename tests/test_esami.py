@@ -965,3 +965,82 @@ class TestValutaEsempioStato:
         esito = valuta_esempio_stato(modello, vocab, ev1, esempio, ctx=500, device="cpu")
         assert esito.esatto
         assert esito.blocchi_generati == [blocco1]  # il gruppo stray non è incluso
+
+    def _tre_domande(self):
+        # tre domande diverse sulla stessa storia (l'esame ha più esempi/storia)
+        def _dom(quesito):
+            return grafo_a_token(grafo_fatto("trovarsi", nsubj="sara", quesito=quesito))
+        return [
+            {"tipo": "posizione", "domanda": _dom("dove"),
+             "risposta": grafo_a_token(grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "cucina"}))},
+            {"tipo": "posizione", "domanda": _dom("chi"),
+             "risposta": grafo_a_token(grafo_fatto("essere", nsubj="sara", **{"obl:luogo": "giardino"}))},
+            {"tipo": "posizione", "domanda": _dom("dove"),
+             "risposta": grafo_a_token(NON_LO_SO)},
+        ]
+
+    def _modello_vero(self, vocab):
+        import torch
+        from cervello.modello import ConfigModello, Modello
+
+        torch.manual_seed(0)
+        cfg = ConfigModello(
+            vocab_size=vocab.dimensione, ctx=160, n_layer=2, n_head=2,
+            d_model=32, d_ff=64, dropout=0.0,
+        )
+        return Modello(cfg).eval()
+
+    def test_riuso_prefisso_stato_uguale_a_indipendente(self):
+        # Guardia sul riuso del prefisso storia+stato: generarlo una volta e
+        # riusarlo (su copia) su più domande deve dare risultati byte-identici
+        # alla valutazione indipendente per esempio. Cattura il leak di stato
+        # (dimenticare la copia del prefisso -> la 2ª domanda vede la 1ª).
+        import torch
+        from esami.esamina import (
+            _completa_risposta_stato, _genera_prefisso_stato, valuta_esempio_stato,
+        )
+
+        vocab = carica_vocabolario()
+        modello = self._modello_vero(vocab)
+        ev1, ev2 = self._storia_due_tick()
+        storia_flat = ev1 + ev2
+        esempi = self._tre_domande()
+
+        riferimento = [
+            valuta_esempio_stato(modello, vocab, storia_flat, es, ctx=160, device="cpu")
+            for es in esempi
+        ]
+
+        with torch.no_grad():
+            ids0, blocchi = _genera_prefisso_stato(modello, vocab, storia_flat, ctx=160, device="cpu")
+        ids0_snapshot = list(ids0)
+        for es, rif in zip(esempi, riferimento):
+            with torch.no_grad():
+                esito = _completa_risposta_stato(
+                    modello, vocab, list(ids0), blocchi, es, ctx=160, device="cpu",
+                )
+            assert esito.token_generati == rif.token_generati
+            assert esito.blocchi_generati == rif.blocchi_generati == blocchi
+            assert esito.categoria == rif.categoria
+            assert ids0 == ids0_snapshot  # il prefisso condiviso non è mutato
+
+    def test_valuta_dataset_stato_riusa_prefisso_per_storia(self):
+        # valuta_dataset(stato=True) su un record multi-domanda deve aggregare
+        # esattamente come la valutazione indipendente per esempio.
+        from esami.esamina import valuta_dataset, valuta_esempio_stato
+
+        vocab = carica_vocabolario()
+        modello = self._modello_vero(vocab)
+        ev1, ev2 = self._storia_due_tick()
+        storia_flat = ev1 + ev2
+        esempi = self._tre_domande()
+        record = [{"storia": storia_flat, "esempi": esempi}]
+
+        esito = valuta_dataset(modello, vocab, record, ctx=160, device="cpu", stato=True)
+
+        atteso = {c: 0 for c in ("esatto", "invenzione", "astensione_errata", "malformata", "errore")}
+        for es in esempi:
+            rif = valuta_esempio_stato(modello, vocab, storia_flat, es, ctx=160, device="cpu")
+            atteso[rif.categoria] += 1
+        assert esito["n_esempi"] == len(esempi)
+        assert esito["conteggi"] == atteso

@@ -138,8 +138,12 @@ def _valuta_dev(
     # modello genera lo stato prima di rispondere. Gated: senza dataset.stato è
     # il comportamento di sempre, byte-identico.
     stato = config["dataset"].get("stato", False)
+    t0 = time.time()
     esiti = valuta_dataset(modello, vocab, campione, config["dataset"]["ctx"], device, stato=stato)
-    return {"loss_dev": loss_dev, "esattezza_dev": esiti["esattezza"]}
+    # Il decode interlacciato è la parte cara: cronometrarlo dice subito, dalla
+    # prima riga, se un eval su tutti gli `esame_storie` è sostenibile (§6).
+    secondi_eval = time.time() - t0
+    return {"loss_dev": loss_dev, "esattezza_dev": esiti["esattezza"], "secondi_eval": secondi_eval}
 
 
 def _salva_parziale(
@@ -295,17 +299,20 @@ def addestra_stadio(
                 token_al_secondo = token_dal_log / max(ora - t_ultimo_log, 1e-9)
                 t_ultimo_log, token_dal_log = ora, 0
 
+                secondi_eval = ultima_valutazione.get("secondi_eval")
                 riga = {
                     "step": step, "stadio": stadio, "loss_train": loss_train,
                     "loss_dev": ultima_valutazione["loss_dev"],
                     "esattezza_dev": ultima_valutazione["esattezza_dev"],
                     "token_al_secondo": token_al_secondo,
+                    "secondi_eval": secondi_eval,
                 }
                 _scrivi_log(percorso_log, riga)
                 print(f"[stadio {stadio}] step {step}: loss_train={loss_train:.4f} "
                       f"loss_dev={ultima_valutazione['loss_dev']:.4f} "
                       f"esattezza_dev={ultima_valutazione['esattezza_dev']:.4f} "
-                      f"tok/s={token_al_secondo:.0f}")
+                      f"tok/s={token_al_secondo:.0f}"
+                      + (f" eval={secondi_eval:.0f}s" if secondi_eval is not None else ""))
 
                 if ultima_valutazione["esattezza_dev"] > miglior_esattezza_dev:
                     miglior_esattezza_dev = ultima_valutazione["esattezza_dev"]
@@ -466,7 +473,13 @@ def esegui_curriculum(
 
         esame_record = _carica_record(percorso_dataset(stadio, "esame", config))
         modello.eval()
-        esito_esame = valuta_dataset(modello, vocab, esame_record, config["dataset"]["ctx"], device)
+        # Fase B: se il train ha i blocchi [STATO], l'esame ufficiale li fa
+        # GENERARE al modello (decode interlacciato, §5, "Decisione 1") — come la
+        # dev. Senza `dataset.stato` è il decode di sempre, byte-identico.
+        stato = config["dataset"].get("stato", False)
+        esito_esame = valuta_dataset(
+            modello, vocab, esame_record, config["dataset"]["ctx"], device, stato=stato,
+        )
         modello.train()
 
         percorso_esame = dir_risultati / f"esame_stadio{stadio}.json"

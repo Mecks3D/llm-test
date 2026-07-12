@@ -226,34 +226,41 @@ def _genera_blocco_stato(
     return ids[inizio:]
 
 
-def valuta_esempio_stato(
-    modello: Modello, vocab: Vocabolario, storia_flat: list[str], esempio: dict,
-    ctx: int, device: str,
-) -> EsitoEsempioStato:
-    """Valuta un esempio con decodifica interlacciata (§5): eventi teacher-
-    forced tick per tick, blocchi [STATO] generati dal modello, poi la risposta.
-    Metrica primaria invariata (risposta finale, grafo vs grafo); i blocchi
-    generati tornano per la metrica ausiliaria di `esami/diagnosi.py` (§6)."""
-    era_training = modello.training
-    modello.eval()
+def _genera_prefisso_stato(
+    modello: Modello, vocab: Vocabolario, storia_flat: list[str], ctx: int, device: str,
+) -> tuple[list[int], list[list[str]]]:
+    """Free-run interlacciato dei blocchi [STATO] lungo la storia (§5): eventi
+    teacher-forced tick per tick, blocco [STATO] generato dal modello a ogni fine
+    tick. Ritorna gli id fino a PRIMA di [DOMANDA] e i blocchi generati (token).
 
+    Dipende SOLO dalla storia, non dalla domanda: per una storia con più domande
+    (l'esame ha fino a `n_per_tipo` esempi per storia) il prefisso si genera una
+    volta e si riusa su tutte — byte-identico, perché la generazione è greedy e
+    deterministica. Presuppone il modello già in `eval()` (lo garantisce il
+    chiamante); avvolto in `no_grad` dai chiamanti."""
     ids = [vocab.id(STORIA)]
     blocchi_generati: list[list[str]] = []
-    with torch.no_grad():
-        for _tick, eventi_tick in _raggruppa_eventi_per_tick(storia_flat):
-            for ev_tok in eventi_tick:  # eventi dati, teacher-forced
-                ids.extend(vocab.id(t) for t in ev_tok)
-            ids.append(vocab.id(STATO))  # cue del blocco (non imparato a emettere)
-            gen = _genera_blocco_stato(modello, vocab, ids, ctx, device)
-            blocchi_generati.append([vocab.token(i) for i in gen])
+    for _tick, eventi_tick in _raggruppa_eventi_per_tick(storia_flat):
+        for ev_tok in eventi_tick:  # eventi dati, teacher-forced
+            ids.extend(vocab.id(t) for t in ev_tok)
+        ids.append(vocab.id(STATO))  # cue del blocco (non imparato a emettere)
+        gen = _genera_blocco_stato(modello, vocab, ids, ctx, device)
+        blocchi_generati.append([vocab.token(i) for i in gen])
+    return ids, blocchi_generati
 
-        ids.append(vocab.id(DOMANDA))
-        ids.extend(vocab.id(t) for t in esempio["domanda"])
-        ids.append(vocab.id(RISPOSTA))
-        generati_ids = decodifica_greedy(modello, vocab, ids, ctx, device)
 
-    if era_training:
-        modello.train()
+def _completa_risposta_stato(
+    modello: Modello, vocab: Vocabolario, ids_prefisso: list[int],
+    blocchi_generati: list[list[str]], esempio: dict, ctx: int, device: str,
+) -> EsitoEsempioStato:
+    """Dato il prefisso storia+stato (da `_genera_prefisso_stato`), appende
+    [DOMANDA]+domanda+[RISPOSTA] e decodifica la risposta. MODIFICA `ids_prefisso`
+    in place: chi lo riusa su più domande passa una copia (`list(...)`)."""
+    ids = ids_prefisso
+    ids.append(vocab.id(DOMANDA))
+    ids.extend(vocab.id(t) for t in esempio["domanda"])
+    ids.append(vocab.id(RISPOSTA))
+    generati_ids = decodifica_greedy(modello, vocab, ids, ctx, device)
 
     generati_token = [vocab.token(i) for i in generati_ids]
     if generati_token and generati_token[-1] == FINE:
@@ -270,6 +277,27 @@ def valuta_esempio_stato(
         tipo=esempio["tipo"], categoria=categoria, esatto=categoria == "esatto",
         token_generati=generati_token, blocchi_generati=blocchi_generati,
     )
+
+
+def valuta_esempio_stato(
+    modello: Modello, vocab: Vocabolario, storia_flat: list[str], esempio: dict,
+    ctx: int, device: str,
+) -> EsitoEsempioStato:
+    """Valuta un esempio con decodifica interlacciata (§5): eventi teacher-
+    forced tick per tick, blocchi [STATO] generati dal modello, poi la risposta.
+    Metrica primaria invariata (risposta finale, grafo vs grafo); i blocchi
+    generati tornano per la metrica ausiliaria di `esami/diagnosi.py` (§6).
+
+    Per un dataset con più domande sulla stessa storia usare `valuta_dataset`
+    (`stato=True`), che genera il prefisso una sola volta per storia."""
+    era_training = modello.training
+    modello.eval()
+    with torch.no_grad():
+        ids, blocchi_generati = _genera_prefisso_stato(modello, vocab, storia_flat, ctx, device)
+        esito = _completa_risposta_stato(modello, vocab, ids, blocchi_generati, esempio, ctx, device)
+    if era_training:
+        modello.train()
+    return esito
 
 
 def campiona_per_valutazione(record: list[dict], n: int, rng: random.Random) -> list[dict]:
@@ -296,17 +324,29 @@ def valuta_dataset(
 
     `stato=True` (Fase B): decodifica interlacciata (§5), il modello genera i
     blocchi [STATO] lungo la storia prima di rispondere. Default False:
-    comportamento invariato, byte-identico."""
+    comportamento invariato, byte-identico. Con `stato=True` il prefisso
+    storia+stato (la parte cara del decode) si genera UNA volta per storia e si
+    riusa su tutte le sue domande (byte-identico, ma ~`n_per_tipo`× più veloce
+    sull'esame)."""
     totali = {c: 0 for c in CATEGORIE}
     per_tipo: dict[str, dict[str, int]] = {}
     campioni_non_esatti: list[dict] = []
     n = 0
 
+    era_training = modello.training
+    if stato:
+        modello.eval()
     for r in record:
+        if stato:
+            with torch.no_grad():
+                ids_storia, blocchi = _genera_prefisso_stato(modello, vocab, r["storia"], ctx, device)
         for esempio in r["esempi"]:
             n += 1
             if stato:
-                esito = valuta_esempio_stato(modello, vocab, r["storia"], esempio, ctx, device)
+                with torch.no_grad():
+                    esito = _completa_risposta_stato(
+                        modello, vocab, list(ids_storia), blocchi, esempio, ctx, device,
+                    )
             else:
                 esito = valuta_esempio(modello, vocab, r["storia"], esempio, ctx, device)
             totali[esito.categoria] += 1
@@ -320,6 +360,8 @@ def valuta_dataset(
                     "generato": esito.token_generati,
                     "oro": list(esempio["risposta"]),
                 })
+    if stato and era_training:
+        modello.train()
 
     esattezza = totali["esatto"] / n if n else 0.0
     esattezza_per_tipo = {t: (d["esatto"] / d["n"] if d["n"] else 0.0) for t, d in per_tipo.items()}
