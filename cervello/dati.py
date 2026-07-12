@@ -17,7 +17,7 @@ from typing import Iterator, Sequence
 
 import torch
 
-from .sequenza import FINE, PAD, RISPOSTA, componi_esempio
+from .sequenza import FINE, PAD, RISPOSTA, STATO, componi_esempio, span_blocchi_stato
 from .vocabolario import Vocabolario
 
 
@@ -42,6 +42,25 @@ def _maschera_piena(token: Sequence[str]) -> list[bool]:
     return [idx_risposta < i <= idx_fine for i in range(len(token))]
 
 
+def _maschera_stato(token: Sequence[str]) -> list[bool]:
+    """Maschera di loss per gli esempi con blocchi [STATO] (Fase B,
+    fasi/FASE2_PIANO_STATO.md §3).
+
+    Vera dove il modello deve *generare*: (a) il contenuto di ogni blocco
+    [STATO] (etichetta di tick + posizioni `trovarsi`) e (b) la risposta,
+    esattamente come `_maschera_piena` (dopo [RISPOSTA] fino a [FINE] incluso).
+    Falsa sugli eventi della storia, sulla domanda e sui delimitatori
+    [STORIA]/[STATO]/[DOMANDA]/[RISPOSTA] (dati, non imparati a emettere).
+
+    Su un esempio senza blocchi stato coincide con `_maschera_piena`.
+    """
+    maschera = _maschera_piena(token)
+    for inizio, fine in span_blocchi_stato(token):
+        for i in range(inizio, fine):
+            maschera[i] = True
+    return maschera
+
+
 @dataclass(frozen=True)
 class Batch:
     input: torch.Tensor      # (B, T) long
@@ -57,7 +76,13 @@ def impacchetta_batch(esempi: Sequence[Sequence[str]], vocab: Vocabolario) -> Ba
 
     id_pad = vocab.id(PAD)
     sequenze_id = [[vocab.id(t) for t in token] for token in esempi]
-    maschere_piene = [_maschera_piena(token) for token in esempi]
+    # Byte-identico sul default: un esempio senza blocchi [STATO] usa
+    # esattamente `_maschera_piena` di sempre; solo gli esempi con stato
+    # (Fase B) attivano `_maschera_stato`.
+    maschere_piene = [
+        (_maschera_stato if STATO in token else _maschera_piena)(token)
+        for token in esempi
+    ]
 
     lunghezza_max = max(len(s) for s in sequenze_id)
     if lunghezza_max < 2:

@@ -126,6 +126,7 @@ from cervello.sequenza import (
     esempio_stato_a_token,
     grafo_a_token,
     grafo_posizione,
+    span_blocchi_stato,
     token_a_grafo,
 )
 
@@ -281,6 +282,19 @@ class TestEsempioStato:
         with pytest.raises(ValueError):
             blocco_stato_a_token("cucina", [("sara", "giardino")])
 
+    def test_span_blocchi_stato(self):
+        segmenti, domanda, risposta = self._esempio_due_tick()
+        seq = componi_esempio_stato(segmenti, domanda, risposta)
+        spans = span_blocchi_stato(seq)
+        assert len(spans) == 2
+        for (inizio, fine), (_, blocco) in zip(spans, segmenti):
+            assert seq[inizio - 1] == "[STATO]"  # [STATO] escluso dallo span
+            assert list(seq[inizio:fine]) == list(blocco[1:])  # contenuto = blocco senza [STATO]
+
+    def test_span_vuoto_senza_stato(self):
+        seq = componi_esempio([["(", "andare", ")"]], ["(", "trovarsi", ")"], ["(", "non-lo-so", ")"])
+        assert span_blocchi_stato(seq) == []
+
     def test_eventi_di_coda_senza_stato_solleva(self):
         # una storia che finisce con eventi non seguiti da [STATO] è malformata.
         ev = grafo_a_token(evento_a_grafo(Evento(t=1, azione="andare", agente="sara", luogo="cucina")))
@@ -358,6 +372,44 @@ class TestDatiMaschera:
         assert maschera == atteso
         assert not any(maschera[: idx_risposta + 1])
         assert all(maschera[idx_risposta + 1 : idx_fine + 1])
+
+    def test_maschera_stato_default_uguale_a_piena(self):
+        # Su un esempio senza blocchi [STATO] la maschera stato coincide con la
+        # piena: cancello byte-identico del default.
+        from cervello.dati import _maschera_piena, _maschera_stato
+
+        assert _maschera_stato(_ESEMPIO_GOLDEN) == _maschera_piena(_ESEMPIO_GOLDEN)
+        assert _maschera_stato(_ESEMPIO_CORTO) == _maschera_piena(_ESEMPIO_CORTO)
+
+    def test_maschera_stato_contenuto_blocchi_e_risposta(self):
+        # Test 3 del piano: vera sui contenuti dei blocchi stato + risposta,
+        # falsa su eventi, domanda e delimitatori (tranne [FINE]).
+        from cervello.dati import _maschera_stato
+
+        ev9 = grafo_a_token(evento_a_grafo(Evento(t=9, azione="andare", agente="sara", luogo="giardino")))
+        blocco9 = blocco_stato_a_token("nove", [("sara", "giardino"), ("anna", "cucina")])
+        domanda = grafo_a_token(grafo_fatto("trovarsi", nsubj="anna", quesito="dove"))
+        risposta = grafo_a_token(grafo_fatto("essere", nsubj="anna", **{"obl:luogo": "cucina"}))
+        seq = componi_esempio_stato([([ev9], blocco9)], domanda, risposta)
+        m = _maschera_stato(seq)
+        assert len(m) == len(seq)
+
+        # delimitatori dati, non imparati (tranne [FINE], che si impara come stop)
+        for delim in ("[STORIA]", "[STATO]", "[DOMANDA]", "[RISPOSTA]"):
+            assert all(not m[i] for i, t in enumerate(seq) if t == delim)
+        assert m[seq.index("[FINE]")]
+
+        # eventi della storia (fra [STORIA] e il primo [STATO]): falsi
+        assert not any(m[1 : seq.index("[STATO]")])
+
+        # contenuto dei blocchi stato: vero
+        for inizio, fine in span_blocchi_stato(seq):
+            assert all(m[inizio:fine])
+
+        # risposta: vera da dopo [RISPOSTA] fino a [FINE] incluso
+        i_r, i_f = seq.index("[RISPOSTA]"), seq.index("[FINE]")
+        assert not m[i_r]
+        assert all(m[i_r + 1 : i_f + 1])
 
 
 @pytest.mark.torch

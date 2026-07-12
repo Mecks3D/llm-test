@@ -367,6 +367,36 @@ def _analizza_blocco_stato(token: Sequence[str], i: int) -> tuple[BloccoStato, i
     return BloccoStato(tick_lemma, tuple(posizioni)), i
 
 
+def span_blocchi_stato(token: Sequence[str]) -> list[tuple[int, int]]:
+    """Intervalli `[inizio, fine)` del CONTENUTO di ogni blocco `[STATO]`.
+
+    Il contenuto va dal token successivo a `[STATO]` (l'etichetta di tick) fino
+    alla fine dell'ultima posizione, escluso il token `[STATO]` stesso. Confine
+    di blocco identico all'analizzatore: la coda è il primo grafo con radice
+    diversa da `trovarsi` (inizio del tick successivo) o un token di controllo.
+    Usato dalla maschera di loss (`cervello/dati.py`), che impara il contenuto
+    dei blocchi ma non il delimitatore.
+    """
+    span: list[tuple[int, int]] = []
+    i = 0
+    n = len(token)
+    while i < n:
+        if token[i] != STATO:
+            i += 1
+            continue
+        inizio = i + 1
+        if inizio >= n or token[inizio] != APERTA:
+            raise ValueError("blocco [STATO] senza etichetta di tick")
+        _, i = _estrai_gruppo(token, inizio)  # ( obl:tempo <ord> )
+        while i < n and token[i] == APERTA:
+            gruppo, j = _estrai_gruppo(token, i)
+            if len(gruppo) < 2 or gruppo[1] != VERBO_STATO:
+                break  # inizio del tick successivo
+            i = j
+        span.append((inizio, i))
+    return span
+
+
 def analizza_esempio_stato(token: Sequence[str]) -> EsempioStato:
     """Inverso di `componi_esempio_stato`: scompone la sequenza nei suoi grafi.
 
