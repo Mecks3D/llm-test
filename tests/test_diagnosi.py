@@ -353,3 +353,60 @@ class TestEseguiDiagnosiSezioneTempo:
         config = {"stadi": {1: {"tipi": ["posizione"], "soglia": 0.95, "storie_corte": True}}, "dataset": {}}
         esito = diagnosi_mod.esegui_diagnosi(modello, vocab, record, config, stadio=1, ctx=200, device="cpu")
         assert esito["tempo"] == {}
+
+
+@pytest.mark.torch
+class TestSezioneStato:
+    """Fase B §6.2: cuore metrico della diagnosi dei blocchi [STATO] (puro,
+    nessun modello). posizioni_per_tick sintetico, blocchi generati a mano."""
+
+    # anna: cucina, giardino, salotto, salotto ; piero: camera, camera, bosco, cucina
+    POSIZIONI = {
+        1: {"anna": "cucina", "piero": "camera"},
+        2: {"anna": "giardino", "piero": "camera"},
+        3: {"anna": "salotto", "piero": "bosco"},   # oro al tick 3
+        4: {"anna": "salotto", "piero": "cucina"},
+    }
+
+    def _blocco(self, tick_lemma, coppie):
+        tok = ["(", "obl:tempo", tick_lemma, ")"]
+        for pid, luogo in coppie:
+            tok += grafo_a_token(grafo_fatto("trovarsi", nsubj=pid, **{"obl:luogo": luogo}))
+        return tok
+
+    def test_leggi_blocco_generato_tollerante(self):
+        from esami.diagnosi import _leggi_blocco_generato
+        tick, pos = _leggi_blocco_generato(self._blocco("tre", [("anna", "salotto"), ("piero", "bosco")]))
+        assert tick == "tre"
+        assert pos == {"anna": "salotto", "piero": "bosco"}
+        # token spuri prima/dopo: saltati, non fanno crashare
+        tick2, pos2 = _leggi_blocco_generato(["[FINE]"] + self._blocco("due", [("anna", "cucina")]))
+        assert tick2 == "due" and pos2 == {"anna": "cucina"}
+
+    def test_anatomia_errori_stato(self):
+        from esami.diagnosi import _diagnosi_blocco_stato, _nuovo_accumulatore_stato
+        acc = _nuovo_accumulatore_stato()
+        # blocco 1: anna->giardino (sua posizione al tick 2, vicino) = tick_vicino;
+        #           piero->salotto (posizione dell'ALTRA persona anna al tick 3) = altra_persona
+        _diagnosi_blocco_stato(acc, self.POSIZIONI, 3, 4, self._blocco("tre", [("anna", "giardino"), ("piero", "salotto")]))
+        # blocco 2: anna->salotto (giusto); piero OMESSO = mancante
+        _diagnosi_blocco_stato(acc, self.POSIZIONI, 3, 4, self._blocco("tre", [("anna", "salotto")]))
+        # blocco 3: anna->camera (né sua vicina né di altri al tick 3) = altro; piero->bosco (giusto)
+        _diagnosi_blocco_stato(acc, self.POSIZIONI, 3, 4, self._blocco("tre", [("anna", "camera"), ("piero", "bosco")]))
+
+        assert acc["n_blocchi"] == 3
+        assert acc["n_posizioni"] == 6
+        assert acc["posizioni_esatte"] == 2
+        assert acc["tick_esatti"] == 3  # etichetta "tre" sempre corretta
+        assert dict(acc["anatomia_errori"]) == {"tick_vicino": 1, "altra_persona": 1, "mancante": 1, "altro": 1}
+        # tick 3 su n_tick 4 -> distanza coda 1 -> bucket "1-2"
+        assert acc["per_distanza_coda"]["1-2"]["n"] == 6
+        assert acc["per_distanza_coda"]["1-2"]["esatto"] == 2
+
+    def test_blocco_malformato_conta_mancanti(self):
+        from esami.diagnosi import _diagnosi_blocco_stato, _nuovo_accumulatore_stato
+        acc = _nuovo_accumulatore_stato()
+        _diagnosi_blocco_stato(acc, self.POSIZIONI, 3, 4, ["(", "obl:tempo", "tre", ")"])  # nessuna posizione
+        assert acc["malformati"] == 1
+        assert dict(acc["anatomia_errori"]) == {"mancante": 2}  # anna e piero entrambe assenti
+        assert acc["blocchi_esatti"] == 0

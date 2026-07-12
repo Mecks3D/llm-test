@@ -31,14 +31,16 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+from mondo import dati_mondo as dm
 from mondo.domande import _evento_al_tick, _grafo_evento_senza_tempo, _posizione_al_tick
 from mondo.grafo import NON_LO_SO, Grafo
+from mondo.numeri import lemma_numero
 from mondo.simulatore import Storia, genera_storia
 
-from cervello.sequenza import token_a_grafo
+from cervello.sequenza import APERTA, CHIUSA, VERBO_STATO, token_a_grafo
 from cervello.vocabolario import carica_vocabolario
 
-from .esamina import CATEGORIE, _carica_modello, dispositivo, valuta_esempio
+from .esamina import CATEGORIE, _carica_modello, dispositivo, valuta_esempio, valuta_esempio_stato
 from .genera import (
     PROJECT_ROOT,
     TIPI_TEMPO,
@@ -339,6 +341,156 @@ def _serializza_tempo(acc: dict[str, Any]) -> dict[str, Any]:
     return fuori
 
 
+# --- Sezione "stato" (Fase B, fasi/FASE2_PIANO_STATO.md §6.2): accuratezza dei
+# blocchi [STATO] generati dal modello all'esame (decode interlacciato §5)
+# contro la verità del simulatore, per tick e per fascia di distanza dalla coda,
+# più l'anatomia degli errori — la verifica empirica diretta dell'ipotesi §0
+# (puntatore temporale sfocato + interferenza fra entità).
+
+
+def _gruppi_bilanciati(tokens: list[str]) -> list[list[str]]:
+    """Sottogruppi `( ... )` bilanciati di `tokens`, tollerante: salta i token
+    fuori da un gruppo (l'output del modello può essere malformato)."""
+    gruppi: list[list[str]] = []
+    i, n = 0, len(tokens)
+    while i < n:
+        if tokens[i] != APERTA:
+            i += 1
+            continue
+        depth, j = 0, i
+        while j < n:
+            if tokens[j] == APERTA:
+                depth += 1
+            elif tokens[j] == CHIUSA:
+                depth -= 1
+                if depth == 0:
+                    break
+            j += 1
+        if depth != 0:
+            break  # parentesi non chiusa: scarta la coda
+        gruppi.append(tokens[i : j + 1])
+        i = j + 1
+    return gruppi
+
+
+def _leggi_blocco_generato(tokens: list[str]) -> tuple[str | None, dict[str, str]]:
+    """Legge un blocco [STATO] generato (contenuto senza [STATO]) in
+    `(tick_lemma | None, {persona: luogo})`, tollerante ai gruppi malformati."""
+    tick_lemma: str | None = None
+    posizioni: dict[str, str] = {}
+    for gruppo in _gruppi_bilanciati(tokens):
+        if len(gruppo) < 3:
+            continue
+        radice = gruppo[1]
+        if radice == "obl:tempo":
+            if tick_lemma is None:
+                tick_lemma = gruppo[2]
+        elif radice == VERBO_STATO:
+            try:
+                g = token_a_grafo(gruppo, "fatto")
+            except ValueError:
+                continue
+            pid = _lemma_per_relazione(g, "nsubj")
+            luogo = _lemma_per_relazione(g, "obl:luogo")
+            if pid is not None and luogo is not None and pid not in posizioni:
+                posizioni[pid] = luogo
+    return tick_lemma, posizioni
+
+
+def _posizioni_per_tick(seed: int, n_tick: int, cast) -> dict[int, dict[str, str]]:
+    """Posizione effettiva di ogni persona del cast a fine di OGNI tick (non
+    solo quelli con eventi), rieseguendo la storia troncata — la stessa
+    semantica dello stato-oro (§1.9). Serve sia per l'oro sia per riconoscere
+    un "tick vicino" nell'anatomia degli errori."""
+    persone = cast if cast is not None else dm.PERSONE
+    ids = [p.id for p in persone]
+    out: dict[int, dict[str, str]] = {}
+    for tt in range(1, n_tick + 1):
+        stato_t = genera_storia(seed=seed, n_tick=tt, persone=cast).stato_finale
+        out[tt] = {pid: stato_t.luogo_effettivo(pid) for pid in ids}
+    return out
+
+
+def _nuovo_accumulatore_stato() -> dict[str, Any]:
+    return {
+        "n_blocchi": 0,
+        "blocchi_esatti": 0,        # tick giusto E tutte le posizioni giuste
+        "tick_esatti": 0,           # etichetta di tick corretta
+        "n_posizioni": 0,
+        "posizioni_esatte": 0,
+        "malformati": 0,            # blocchi da cui non si estrae alcuna posizione
+        "per_distanza_coda": {b: {"esatto": 0, "n": 0} for b in BUCKET_DISTANZA},        # posizioni
+        "blocchi_per_distanza": {b: {"esatto": 0, "n": 0} for b in BUCKET_DISTANZA},
+        "anatomia_errori": Counter(),  # tick_vicino / altra_persona / mancante / altro
+    }
+
+
+def _diagnosi_blocco_stato(
+    acc: dict[str, Any], posizioni_per_tick: dict[int, dict[str, str]],
+    t: int, n_tick: int, gen_tokens: list[str],
+) -> None:
+    """Confronta un blocco generato al tick `t` con l'oro del simulatore.
+    L'anatomia di ogni posizione sbagliata (§0): `tick_vicino` = il luogo è la
+    posizione di quella persona a un tick a distanza 1-2 (puntatore sfocato);
+    `altra_persona` = è la posizione di un'ALTRA persona a questo tick
+    (interferenza/binding); `mancante` = persona non emessa; `altro`."""
+    gold = posizioni_per_tick[t]
+    gen_tick_lemma, gen_pos = _leggi_blocco_generato(gen_tokens)
+    bucket = _bucket_distanza(n_tick - t)
+
+    acc["n_blocchi"] += 1
+    acc["blocchi_per_distanza"][bucket]["n"] += 1
+    if not gen_pos:
+        acc["malformati"] += 1
+    tick_ok = gen_tick_lemma == lemma_numero(t)
+    if tick_ok:
+        acc["tick_esatti"] += 1
+    blocco_ok = tick_ok
+
+    tick_vicini = [tt for tt in posizioni_per_tick if tt != t and abs(tt - t) <= 2]
+    for pid, gold_luogo in gold.items():
+        acc["n_posizioni"] += 1
+        acc["per_distanza_coda"][bucket]["n"] += 1
+        gen_luogo = gen_pos.get(pid)
+        if gen_luogo == gold_luogo:
+            acc["posizioni_esatte"] += 1
+            acc["per_distanza_coda"][bucket]["esatto"] += 1
+            continue
+        blocco_ok = False
+        if gen_luogo is None:
+            acc["anatomia_errori"]["mancante"] += 1
+        elif any(posizioni_per_tick[tt].get(pid) == gen_luogo for tt in tick_vicini):
+            acc["anatomia_errori"]["tick_vicino"] += 1
+        elif any(luogo == gen_luogo for altro, luogo in gold.items() if altro != pid):
+            acc["anatomia_errori"]["altra_persona"] += 1
+        else:
+            acc["anatomia_errori"]["altro"] += 1
+
+    if blocco_ok:
+        acc["blocchi_esatti"] += 1
+        acc["blocchi_per_distanza"][bucket]["esatto"] += 1
+
+
+def _serializza_stato(acc: dict[str, Any]) -> dict[str, Any]:
+    return {
+        "n_blocchi": acc["n_blocchi"],
+        "blocchi_esattezza": _rateo(acc["blocchi_esatti"], acc["n_blocchi"]),
+        "tick_esattezza": _rateo(acc["tick_esatti"], acc["n_blocchi"]),
+        "posizioni_esattezza": _rateo(acc["posizioni_esatte"], acc["n_posizioni"]),
+        "n_posizioni": acc["n_posizioni"],
+        "malformati": acc["malformati"],
+        "posizioni_per_distanza_coda": {
+            b: {"esattezza": _rateo(v["esatto"], v["n"]), "n": v["n"]}
+            for b, v in acc["per_distanza_coda"].items()
+        },
+        "blocchi_per_distanza_coda": {
+            b: {"esattezza": _rateo(v["esatto"], v["n"]), "n": v["n"]}
+            for b, v in acc["blocchi_per_distanza"].items()
+        },
+        "anatomia_errori": dict(acc["anatomia_errori"]),
+    }
+
+
 def esegui_diagnosi(
     modello: Any, vocab: Any, record: list[dict], config: dict, stadio: int,
     ctx: int, device: str, max_esempi: int | None = None,
@@ -363,6 +515,9 @@ def esegui_diagnosi(
     anatomia_errori: Counter = Counter()
     per_entita: dict[str, dict[str, int]] = {}
     tempo: dict[str, dict[str, Any]] = {}
+    stato_attivo = config["dataset"].get("stato", False)
+    stato_acc = _nuovo_accumulatore_stato()
+    seed_visti_stato: set[tuple] = set()
 
     cache_storie: dict[tuple, tuple[Storia, int]] = {}
 
@@ -379,7 +534,20 @@ def esegui_diagnosi(
 
     for r, esempio in coppie:
         n += 1
-        esito = valuta_esempio(modello, vocab, r["storia"], esempio, ctx, device)
+        if stato_attivo:
+            esito = valuta_esempio_stato(modello, vocab, r["storia"], esempio, ctx, device)
+            # I blocchi [STATO] dipendono solo dalla storia (decode
+            # deterministico), non dalla domanda: si contano UNA volta per storia.
+            chiave_storia = (r["seed"], r.get("troncamento"))
+            if chiave_storia not in seed_visti_stato:
+                seed_visti_stato.add(chiave_storia)
+                storia_s, n_tick_s = _storia_e_n_tick(r)
+                posizioni = _posizioni_per_tick(r["seed"], n_tick_s, _cast_per_seed(config, r["seed"]))
+                tick_con_eventi = sorted({e.t for e in storia_s.eventi})
+                for tick_t, blocco_tok in zip(tick_con_eventi, esito.blocchi_generati):
+                    _diagnosi_blocco_stato(stato_acc, posizioni, tick_t, n_tick_s, blocco_tok)
+        else:
+            esito = valuta_esempio(modello, vocab, r["storia"], esempio, ctx, device)
         totali[esito.categoria] += 1
 
         if esempio["tipo"] in TIPI_TEMPO:
@@ -456,6 +624,7 @@ def esegui_diagnosi(
             e: {"esattezza": _rateo(d["esatto"], d["n"]), "n": d["n"]} for e, d in per_entita.items()
         },
         "tempo": {tipo: _serializza_tempo(acc) for tipo, acc in sorted(tempo.items())},
+        "stato": _serializza_stato(stato_acc) if stato_attivo else {},
     }
 
 
@@ -515,6 +684,14 @@ def _cli() -> None:
         if "errori_verbo_giusto" in sezione:
             n_errori = sum(sezione["anatomia_errori"].values())
             print(f"    errori con verbo giusto: {sezione['errori_verbo_giusto']}/{n_errori}")
+    if esito.get("stato"):
+        s = esito["stato"]
+        print(f"  [stato] blocchi: esattezza {s['blocchi_esattezza']:.4f} (n={s['n_blocchi']}), "
+              f"tick {s['tick_esattezza']:.4f}, posizioni {s['posizioni_esattezza']:.4f} "
+              f"(n={s['n_posizioni']}), malformati {s['malformati']}")
+        print(f"    posizioni per distanza dalla coda: "
+              f"{ {b: v['esattezza'] for b, v in s['posizioni_per_distanza_coda'].items()} }")
+        print(f"    anatomia errori: {s['anatomia_errori']}")
     print(f"-> {percorso_out}")
 
 

@@ -1,0 +1,49 @@
+# Fumo di v1_stato (fasi/FASE2_PIANO_STATO.md §6.1, T5): pipeline intera su
+# Colab in pochi minuti — dataset piccolo, pochi step — per verificare che la
+# supervisione densa dello stato giri end-to-end (dati con blocchi [STATO],
+# training con maschera stato, esame con decode interlacciato) e che le
+# lunghezze reali stiano sotto ctx. Non misura la qualità.
+
+nome_run: v1_stato_fumo
+device: auto
+seed_torch: 1337
+
+percorsi:
+  lessico: lingua/lessico.tsv
+  vocabolario: cervello/vocabolario.json
+  dati_dir: dati/stato_fumo
+  risultati_dir: dati/risultati
+
+dataset:
+  ctx: 3072
+  train_storie: 300
+  dev_storie: 300
+  esame_storie: 300
+  n_per_tipo: 8
+  stato: true
+
+stadi:
+  1:
+    tipi: [posizione]
+    soglia: 0.95
+    storie_corte: true
+
+modello:
+  n_layer: 8
+  n_head: 8
+  d_model: 256
+  d_ff: 1024
+  dropout: 0.1
+
+training:
+  batch: 4
+  accumulo: 8
+  lr: 3.0e-4
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  warmup_step: 200
+  grad_clip: 1.0
+  max_step: 600
+  intervallo_valutazione: 200
+  dev_campione: 200

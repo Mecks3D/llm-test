@@ -133,7 +133,12 @@ def _valuta_dev(
             somma_loss += calcola_loss(modello, batch, device).item() * token_batch
             n_token += token_batch
     loss_dev = somma_loss / max(n_token, 1)
-    esiti = valuta_dataset(modello, vocab, campione, config["dataset"]["ctx"], device)
+    # Fase B: se il train ha i blocchi [STATO], la dev valuta col decode
+    # interlacciato dell'esame (§5) — stessa distribuzione del training, il
+    # modello genera lo stato prima di rispondere. Gated: senza dataset.stato è
+    # il comportamento di sempre, byte-identico.
+    stato = config["dataset"].get("stato", False)
+    esiti = valuta_dataset(modello, vocab, campione, config["dataset"]["ctx"], device, stato=stato)
     return {"loss_dev": loss_dev, "esattezza_dev": esiti["esattezza"]}
 
 

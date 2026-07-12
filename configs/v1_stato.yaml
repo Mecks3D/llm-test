@@ -1,0 +1,49 @@
+# Fase B — supervisione densa in-sequenza dello stato (vedi
+# fasi/FASE2_PIANO_STATO.md). Cast pieno, da zero, dev/esame ufficiali
+# INVARIATI (confronto diretto con v1: 0,573). Solo il train ha i blocchi
+# [STATO]; all'esame li genera il modello (decode interlacciato, §5).
+# Il blocco `modello:` resta IDENTICO a v1.yaml (stesse shape, ~7,18M param).
+
+nome_run: v1_stato
+device: auto
+seed_torch: 1337
+
+percorsi:
+  lessico: lingua/lessico.tsv
+  vocabolario: cervello/vocabolario.json
+  dati_dir: dati/stato
+  risultati_dir: dati/risultati
+
+dataset:
+  ctx: 3072              # VERIFICARE le lunghezze reali con lo stato (T5)
+  train_storie: 6000
+  dev_storie: 300
+  esame_storie: 300
+  n_per_tipo: 8
+  stato: true            # SOLO split train: blocchi [STATO] per-tick
+
+stadi:
+  1:
+    tipi: [posizione]
+    soglia: 0.95
+    storie_corte: true
+
+modello:                 # IDENTICO a configs/v1.yaml (~7,18M parametri)
+  n_layer: 8
+  n_head: 8
+  d_model: 256
+  d_ff: 1024
+  dropout: 0.1
+
+training:
+  batch: 4
+  accumulo: 8
+  lr: 3.0e-4
+  beta1: 0.9
+  beta2: 0.95
+  weight_decay: 0.1
+  warmup_step: 200
+  grad_clip: 1.0
+  max_step: 8000
+  intervallo_valutazione: 500
+  dev_campione: 200
