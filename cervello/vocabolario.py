@@ -8,8 +8,12 @@ rigenerare `vocabolario.json` e aggiornare i test:
 2. id 65-71: token speciali, in quest'ordine: [PAD] [STORIA] [DOMANDA]
    [RISPOSTA] [FINE] ( )
 3. id 72-86: le 15 relazioni UD usate dai grafi, in ordine alfabetico.
-4. id 87-...: tutti gli altri lemmi del lessico (FUNZ, ORD, ecc.),
+4. id 87-N: tutti gli altri lemmi del lessico (FUNZ, ORD, ecc.),
    nell'ordine delle righe del file.
+5. id N+1: il token speciale [STATO] (Fase B, fasi/FASE2_PIANO_STATO.md §2),
+   appeso in CODA a tutto il resto — NON dentro la sezione dei token speciali
+   (id 65-71) — così gli id di tutti i token preesistenti non si spostano
+   (cancello byte-identico dei default: la sequenza senza stato resta identica).
 """
 from __future__ import annotations
 
@@ -24,6 +28,12 @@ from lingua.lessico import carica_lessico
 _PERCORSO_DEFAULT = Path(__file__).with_name("vocabolario.json")
 
 TOKEN_SPECIALI: tuple[str, ...] = ("[PAD]", "[STORIA]", "[DOMANDA]", "[RISPOSTA]", "[FINE]", "(", ")")
+
+# Delimitatore dei blocchi di stato interlacciati (Fase B). Appeso in coda al
+# vocabolario (vedi genera_vocabolario): NON entra in TOKEN_SPECIALI perché
+# quello sposterebbe gli id di relazioni e lemmi. Restare fuori da TOKEN_SPECIALI
+# mantiene invariati tutti gli id preesistenti.
+TOKEN_STATO: str = "[STATO]"
 
 RELAZIONI_UD: tuple[str, ...] = (
     "advcl:causa", "iobj", "nmod:agente", "nmod:destinatario",
@@ -75,6 +85,7 @@ def genera_vocabolario(percorso_lessico: str | Path = _LESSICO_DEFAULT) -> Vocab
     token.extend(TOKEN_SPECIALI)
     token.extend(RELAZIONI_UD)
     token.extend(v.lemma for v in voci[N_PRIM:])
+    token.append(TOKEN_STATO)  # in coda: non sposta gli id preesistenti
 
     return Vocabolario(tuple(token))
 

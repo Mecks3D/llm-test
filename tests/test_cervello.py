@@ -13,6 +13,7 @@ from lingua.lessico import ORDINE_PRIM, N_PRIM
 from cervello.vocabolario import (
     RELAZIONI_UD,
     TOKEN_SPECIALI,
+    TOKEN_STATO,
     _PERCORSO_DEFAULT,
     carica_vocabolario,
     genera_vocabolario,
@@ -54,6 +55,16 @@ class TestVocabolario:
         # un lemma NOME qualsiasi noto (persona del mondo) deve stare oltre
         # la sezione delle relazioni.
         assert v.id("anna") >= base
+
+    def test_stato_e_ultimo_e_non_sposta_gli_id_preesistenti(self):
+        # [STATO] (Fase B) è appeso in coda: ultimo id del vocabolario, e tutti
+        # i token che lo precedono conservano l'id che avevano senza di lui.
+        v = genera_vocabolario()
+        assert v.token(v.dimensione - 1) == TOKEN_STATO
+        assert v.id(TOKEN_STATO) == v.dimensione - 1
+        # gli id di riferimento delle sezioni precedenti sono intatti
+        assert v.id("(") == N_PRIM + 5
+        assert v.id("nsubj") == N_PRIM + len(TOKEN_SPECIALI) + RELAZIONI_UD.index("nsubj")
 
     def test_dimensione_coerente(self):
         v = genera_vocabolario()
@@ -105,7 +116,18 @@ from mondo.generatore import _lunghezza_storia
 from mondo.grafo import NON_LO_SO, evento_a_grafo, grafo_fatto
 from mondo.simulatore import genera_storia
 from mondo.tipi import Evento
-from cervello.sequenza import componi_esempio, grafo_a_token, token_a_grafo
+from cervello.sequenza import (
+    BloccoStato,
+    EsempioStato,
+    analizza_esempio_stato,
+    blocco_stato_a_token,
+    componi_esempio,
+    componi_esempio_stato,
+    esempio_stato_a_token,
+    grafo_a_token,
+    grafo_posizione,
+    token_a_grafo,
+)
 
 
 class TestSequenzaGolden:
@@ -185,6 +207,88 @@ class TestComponiEsempio:
             + ["[FINE]"]
         )
         assert componi_esempio(storia, domanda, risposta) == atteso
+
+
+class TestEsempioStato:
+    """Fase B: blocchi di stato interlacciati (fasi/FASE2_PIANO_STATO.md §2)."""
+
+    def _esempio_due_tick(self):
+        # tick nove: sara va in giardino; tick dieci: anna va in camera.
+        ev9 = grafo_a_token(evento_a_grafo(Evento(t=9, azione="andare", agente="sara", luogo="giardino")))
+        ev10 = grafo_a_token(evento_a_grafo(Evento(t=10, azione="andare", agente="anna", luogo="camera")))
+        blocco9 = blocco_stato_a_token("nove", [("sara", "giardino"), ("anna", "cucina")])
+        blocco10 = blocco_stato_a_token("dieci", [("sara", "giardino"), ("anna", "camera")])
+        domanda = grafo_a_token(grafo_fatto("trovarsi", nsubj="anna", quesito="dove"))
+        risposta = grafo_a_token(grafo_fatto("essere", nsubj="anna", **{"obl:luogo": "camera"}))
+        segmenti = [([ev9], blocco9), ([ev10], blocco10)]
+        return segmenti, domanda, risposta
+
+    def test_blocco_stato_golden(self):
+        atteso = (
+            "[STATO] ( obl:tempo nove ) "
+            "( trovarsi ( nsubj sara ) ( obl:luogo giardino ) ) "
+            "( trovarsi ( nsubj anna ) ( obl:luogo cucina ) )"
+        ).split()
+        assert blocco_stato_a_token("nove", [("sara", "giardino"), ("anna", "cucina")]) == atteso
+
+    def test_composizione_struttura(self):
+        segmenti, domanda, risposta = self._esempio_due_tick()
+        seq = componi_esempio_stato(segmenti, domanda, risposta)
+        atteso = (
+            ["[STORIA]"] + segmenti[0][0][0] + segmenti[0][1]
+            + segmenti[1][0][0] + segmenti[1][1]
+            + ["[DOMANDA]"] + domanda
+            + ["[RISPOSTA]"] + risposta
+            + ["[FINE]"]
+        )
+        assert seq == atteso
+
+    def test_round_trip_sequenza_grafi_sequenza(self):
+        # Test 1 del piano: sequenza-con-stato -> grafi -> sequenza esatta.
+        segmenti, domanda, risposta = self._esempio_due_tick()
+        seq = componi_esempio_stato(segmenti, domanda, risposta)
+        esempio = analizza_esempio_stato(seq)
+        assert isinstance(esempio, EsempioStato)
+        assert len(esempio.segmenti) == 2
+        assert esempio.segmenti[0][1].tick_lemma == "nove"
+        assert esempio.segmenti[1][1].tick_lemma == "dieci"
+        assert esempio.segmenti[0][1].posizioni[0] == grafo_posizione("sara", "giardino")
+        assert esempio_stato_a_token(esempio) == seq
+
+    def test_nessun_token_nuovo_oltre_a_stato(self):
+        # Test 4 del piano: tutti i token di un blocco stato sono già in
+        # vocabolario; [STATO] è l'unico speciale aggiunto.
+        vocab = carica_vocabolario()
+        segmenti, domanda, risposta = self._esempio_due_tick()
+        seq = componi_esempio_stato(segmenti, domanda, risposta)
+        fuori = [t for t in seq if t not in vocab]
+        assert fuori == [], f"token fuori vocabolario: {fuori}"
+
+    def test_default_senza_stato_byte_identico(self):
+        # Test 2 del piano: componi_esempio (default) resta byte-identico.
+        storia = [["(", "andare", ")"], ["(", "dormire", ")"]]
+        domanda = ["(", "trovarsi", ")"]
+        risposta = ["(", "non-lo-so", ")"]
+        atteso = (
+            ["[STORIA]"] + storia[0] + storia[1]
+            + ["[DOMANDA]"] + domanda
+            + ["[RISPOSTA]"] + risposta
+            + ["[FINE]"]
+        )
+        assert componi_esempio(storia, domanda, risposta) == atteso
+
+    def test_etichetta_tick_non_numerica_solleva(self):
+        with pytest.raises(ValueError):
+            blocco_stato_a_token("cucina", [("sara", "giardino")])
+
+    def test_eventi_di_coda_senza_stato_solleva(self):
+        # una storia che finisce con eventi non seguiti da [STATO] è malformata.
+        ev = grafo_a_token(evento_a_grafo(Evento(t=1, azione="andare", agente="sara", luogo="cucina")))
+        domanda = grafo_a_token(grafo_fatto("trovarsi", nsubj="sara", quesito="dove"))
+        risposta = grafo_a_token(grafo_fatto("non-lo-so"))
+        seq = ["[STORIA]"] + ev + ["[DOMANDA]"] + domanda + ["[RISPOSTA]"] + risposta + ["[FINE]"]
+        with pytest.raises(ValueError):
+            analizza_esempio_stato(seq)
 
 
 class TestRoundTripMassa:
