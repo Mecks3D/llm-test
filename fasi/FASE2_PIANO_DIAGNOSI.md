@@ -388,3 +388,15 @@ Andrea.
   sopra (priorità B, poi C2) resta valida e si rafforza: lo stato denso
   per-tick della Fase B è un'àncora d'indice esplicita; coerente anche con
   A1 (attenzione diffusa, nessuna head di binding netta).
+
+- **2026-07-12: Andrea sceglie di procedere con la Fase B (non A2). Mini-piano
+  esecutivo scritto: `fasi/FASE2_PIANO_STATO.md`** (run `v1_stato`). I tre
+  bivi di design del §3 sono stati sciolti da Andrea: (1) all'esame i blocchi
+  `[STATO]` li **genera il modello** (autoregressivi, verificabili); (2)
+  contenuto = **solo posizioni** delle persone; (3) **etichetta di tick
+  esplicita** in ogni blocco (attacca direttamente il puntatore sfocato
+  isolato qui sopra). Formato interlacciato storia/stato, maschera di loss
+  estesa, decodifica d'esame teacher-force-eventi + free-run-stato, dev/esame
+  ufficiali invariati per il confronto diretto con `v1` (0,573). Prossimo
+  passo: esecuzione delle tappe T1–T7 di quel piano (T1 = formato sequenza +
+  vocabolario). A2 resta fuori (vincolo del piano).
