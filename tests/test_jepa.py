@@ -7,9 +7,12 @@ import pytest
 from jepa.vocabolario_grafi import (
     ENTITA2ID,
     LUOGO2ID,
+    PERSONA2ID,
+    TARGET2ID,
     ID2LUOGO,
     AZIONI_SUPPORTATE,
     AZIONE2ID,
+    N_LUOGHI,
     estrai_evento_da_grafo,
 )
 from jepa.modello_jepa import GraphWorldJEPA
@@ -21,9 +24,9 @@ def test_esclusivita_spaziale_softmax():
     """Verifica che per ogni entità la somma delle probabilità spaziali sia esattamente 1.0 (vincolo fisico)."""
     modello = GraphWorldJEPA(d_embed=32)
     logits = modello.inizializza_stato(batch_size=2)
-    prob = modello.ottieni_probabilita_posizione(logits)
+    prob = modello.ottieni_probabilita(logits)
 
-    # Dimensione prob: [2, N_entita, N_luoghi]
+    # Dimensione prob: [2, N_entita, N_targets]
     somme = torch.sum(prob, dim=-1)
     assert torch.allclose(somme, torch.ones_like(somme), atol=1e-6)
 
@@ -35,7 +38,7 @@ def test_aggiornamento_stato_deterministico():
 
     sara_id = torch.tensor([ENTITA2ID["sara"]])
     andare_id = torch.tensor([AZIONE2ID["andare"]])
-    giardino_id = torch.tensor([LUOGO2ID["giardino"]])
+    giardino_id = torch.tensor([TARGET2ID["giardino"]])
 
     nuovi_logits = modello.aggiorna_stato(logits, sara_id, andare_id, giardino_id)
 
@@ -54,7 +57,7 @@ def test_energy_engine_e_non_lo_so():
     sara_idx = ENTITA2ID["sara"]
 
     # Stato iniziale uniforme: max prob = 1/6 = 0.166 < 0.45 -> 'non lo so'
-    energie, risp = modello.calcola_energia_risposte(logits, sara_idx)
+    energie, risp = modello.calcola_energia_risposte(logits, sara_idx, tipo_domanda="posizione")
     assert risp == "non lo so"
     assert energie["non lo so"] == 0.0
 
@@ -63,10 +66,65 @@ def test_energy_engine_e_non_lo_so():
     logits[0, sara_idx, :] = -10.0
     logits[0, sara_idx, cucina_idx] = 10.0
 
-    energie, risp = modello.calcola_energia_risposte(logits, sara_idx)
+    energie, risp = modello.calcola_energia_risposte(logits, sara_idx, tipo_domanda="posizione")
     assert risp == "cucina"
     assert energie["cucina"] < 0.01
     assert energie["non lo so"] == 1.0
+
+
+def test_eredita_spaziale_oggetti():
+    """Verifica che se Sara prende la mela e va in giardino, la posizione effettiva della mela sia il giardino."""
+    modello = GraphWorldJEPA(d_embed=32)
+    logits = modello.inizializza_stato(batch_size=1)
+
+    sara_idx = ENTITA2ID["sara"]
+    mela_idx = ENTITA2ID["mela"]
+    giardino_targ = TARGET2ID["giardino"]
+    sara_targ = TARGET2ID["sara"]
+
+    # Forziamo Sara in giardino
+    logits[0, sara_idx, :] = -10.0
+    logits[0, sara_idx, giardino_targ] = 10.0
+
+    # Forziamo la mela ad essere tenuta da Sara
+    logits[0, mela_idx, :] = -10.0
+    logits[0, mela_idx, sara_targ] = 10.0
+
+    # Calcoliamo la probabilità effettiva di posizione della mela
+    prob_eff = modello.ottieni_probabilita_effettive_luogo(logits)[0, mela_idx, :]
+    giardino_idx = LUOGO2ID["giardino"]
+
+    assert prob_eff[giardino_idx].item() > 0.95
+
+    # Domanda "Dov'è la mela?"
+    energie, risp = modello.calcola_energia_risposte(logits, mela_idx, tipo_domanda="posizione")
+    assert risp == "giardino"
+
+
+def test_possesso_energia():
+    """Verifica che la domanda di possesso identifichi il portatore, 'nessuno' o 'non lo so'."""
+    modello = GraphWorldJEPA(d_embed=32, soglia_non_lo_so=0.45)
+    logits = modello.inizializza_stato(batch_size=1)
+
+    mela_idx = ENTITA2ID["mela"]
+    sara_targ = TARGET2ID["sara"]
+
+    # Iniziale incerto -> 'non lo so'
+    energie, risp = modello.calcola_energia_risposte(logits, mela_idx, tipo_domanda="possesso")
+    assert risp == "non lo so"
+
+    # Mela appoggiata in cucina (direct location) -> 'nessuno'
+    cucina_idx = LUOGO2ID["cucina"]
+    logits[0, mela_idx, :] = -10.0
+    logits[0, mela_idx, cucina_idx] = 10.0
+    energie, risp = modello.calcola_energia_risposte(logits, mela_idx, tipo_domanda="possesso")
+    assert risp == "nessuno"
+
+    # Mela tenuta da Sara -> 'sara'
+    logits[0, mela_idx, :] = -10.0
+    logits[0, mela_idx, sara_targ] = 10.0
+    energie, risp = modello.calcola_energia_risposte(logits, mela_idx, tipo_domanda="possesso")
+    assert risp == "sara"
 
 
 def test_estrazione_evento_da_grafo():
@@ -85,3 +143,4 @@ def test_estrazione_evento_da_grafo():
     assert info["soggetto"] == "sara"
     assert info["destinazione"] == "giardino"
     assert info["origine"] == "cucina"
+
