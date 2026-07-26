@@ -38,7 +38,9 @@ def _tabella(titolo: str, righe, intestazioni=("", "N", "esattezza")) -> None:
         print("  " + str(riga[0]).ljust(larghezza) + celle)
 
 
-def principale(seed_base: int, n_storie: int, con_jepa: bool = False) -> None:
+def principale(
+    seed_base: int, n_storie: int, con_jepa: bool = False, con_v1: tuple[str, ...] = ()
+) -> None:
     avvio = time.time()
     print("=" * 74)
     print("SONDE — riferimento simbolico `regole/`  (FASE_MENTE.md §8-§9)")
@@ -99,6 +101,8 @@ def principale(seed_base: int, n_storie: int, con_jepa: bool = False) -> None:
 
     if con_jepa:
         _confronto_jepa(seed_base, n_storie, esiti_per_canale)
+    if con_v1:
+        _confronto_v1(1_000_000, n_storie, con_v1)
 
     print(f"\n{'=' * 74}\ntempo totale: {time.time() - avvio:.1f}s su CPU\n")
 
@@ -129,10 +133,48 @@ def _confronto_jepa(seed_base: int, n_storie: int, esiti_per_canale: dict) -> No
         )
     _tabella("  P2 binding — jepa/", p2_binding(jepa, float("nan")))
     _tabella("  P6 propagazione — jepa/", p6_propagazione(jepa))
-    print(
-        "\n  `v1` non è misurabile qui: nessun checkpoint .pt in locale.\n"
-        "  L'adattatore va scritto quando ce n'è uno (vedi FASE_MENTE.md §11)."
-    )
+
+
+def _confronto_v1(seed_base: int, n_storie: int, run: tuple[str, ...]) -> None:
+    """M0.3, seconda metà: `v1` sulla SUA distribuzione.
+
+    Lo stadio 1 di `v1` vive su storie di 3-6 tick e sole domande di posizione
+    (`configs/v1.yaml`). Misurarlo sulle storie lunghe delle sonde sarebbe
+    fuori distribuzione, quindi qui si spostano le sonde sul suo terreno:
+    stesse storie, stessi seed d'esame, stesso protocollo. È il confronto che
+    la storia del progetto non aveva mai avuto.
+    """
+    from .adattatori import CHECKPOINT_V1, esiti_v1
+    from .banco import lunghezza_stadio1
+
+    print("\n" + "-" * 74)
+    print("M0.3 — `v1` sulla sua distribuzione (3-6 tick, posizione, seed d'esame)")
+    print("-" * 74)
+
+    righe = []
+    for nome in run:
+        esiti = esiti_v1(CHECKPOINT_V1[nome], seed_base, n_storie)
+        righe.append((nome, esiti))
+    for etichetta, canali in (
+        ("regole/ (lingua)", ("lingua",)),
+        ("regole/ (visione+lingua)", CANALI_TUTTI),
+    ):
+        esiti, _ = valuta_campione(
+            seed_base, n_storie, lunghezza_fn=lunghezza_stadio1, canali=canali
+        )
+        righe.append((etichetta, [e for e in esiti if e.tipo == "posizione"]))
+
+    print("\n  %-22s %6s %11s %8s" % ("sistema", "N", "narrativa", "reale"))
+    for nome, esiti in righe:
+        print(
+            "  %-22s %6d %11.3f %8.3f"
+            % (
+                nome,
+                len(esiti),
+                sum(e.esatto for e in esiti) / len(esiti),
+                sum(e.esatto_reale for e in esiti) / len(esiti),
+            )
+        )
 
 
 if __name__ == "__main__":
@@ -143,5 +185,15 @@ if __name__ == "__main__":
         "--con-jepa", action="store_true",
         help="addestra e misura anche jepa/ sulla stessa scala (~70s, richiede torch)",
     )
+    parser.add_argument(
+        "--con-v1", nargs="*", metavar="RUN", default=None,
+        help="misura anche i checkpoint di v1 sulla loro distribuzione, sui seed "
+             "d'esame (lento: ~10 min per checkpoint su CPU). Senza argomenti: v1 v1_grad2",
+    )
     argomenti = parser.parse_args()
-    principale(argomenti.seed_base, argomenti.storie, argomenti.con_jepa)
+    run_v1 = (
+        ()
+        if argomenti.con_v1 is None
+        else tuple(argomenti.con_v1) or ("v1", "v1_grad2")
+    )
+    principale(argomenti.seed_base, argomenti.storie, argomenti.con_jepa, run_v1)

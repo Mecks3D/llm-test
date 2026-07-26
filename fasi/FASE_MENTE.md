@@ -378,9 +378,29 @@ sono esattamente ciò che §5 chiede alla rete di imparare da sola.
 
 ### 12.4 Che cosa resta scoperto
 
-- **`v1` non è misurabile con questo strumento**: nessun checkpoint `.pt` in
-  locale. L'adattatore va scritto quando ce n'è uno; `sonde/adattatori.py`
-  mostra la forma da dargli.
+- **`v1` non è ancora misurato — il lavoro è pronto, va lanciato su Colab.**
+  L'adattatore c'è (`sonde/adattatori.py::esiti_v1`, `--con-v1` nella CLI) e
+  funziona su campioni piccoli. La misura completa è però un job torch da
+  decine di minuti su una macchina a 4 core, quindi va su GPU: serve una cella
+  nel notebook e il push del commit. Un tentativo in locale il 2026-07-26 è
+  stato ucciso dal timeout dopo 50 minuti senza produrre nulla.
+
+  Due cose da sapere prima di rilanciarlo:
+
+  - **Il confronto va fatto sulla distribuzione di `v1`, non su quella delle
+    sonde.** Lo stadio 1 di `v1` vive su storie di 3-6 tick e sole domande di
+    posizione (`configs/v1.yaml`); sulle storie di 8-22 tick sarebbe fuori
+    distribuzione. Di qui `banco.lunghezza_stadio1` (byte-identica a
+    `esami/genera.py::_n_tick`) e i seed d'esame >= 1.000.000 — il regime
+    esatto in cui `v1` ha prodotto lo 0,573.
+  - **I checkpoint sono fuori dal repo**, in `/home/andrea/Scaricati/`
+    (`v1`, `v1_facile`, `v1_anti`, `v1_grad1..3`), e non si caricavano più: il
+    vocabolario è cresciuto di due token dopo quei run (`che-cosa` per
+    l'esperimento "tempo", `[STATO]` per la Fase B). Sono appesi in coda, gli
+    id vecchi non si sono spostati, quindi `_carica_modello_epoca` costruisce
+    il modello alla dimensione letta dal checkpoint. Un test in
+    `tests/test_regole.py` fallisce rumorosamente se un domani il vocabolario
+    smettesse di essere un'estensione.
 - `riquadro` è uno stub (il micro-mondo non ha coordinate): il caso
   "+ posizione" della decisione 1 non è ancora valutabile davvero.
 - P6 a profondità 3 ha pochi casi (N=8): serve un campione più grande, o

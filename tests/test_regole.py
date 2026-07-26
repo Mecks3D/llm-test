@@ -260,3 +260,24 @@ def test_sonde_girano_tutte():
         assert righe
         for riga in righe:
             assert all(0.0 <= v <= 1.0 for v in riga[2:] if isinstance(v, float))
+
+
+def test_adattatore_v1_regge_il_vocabolario_cresciuto():
+    """Il vocabolario è cresciuto dopo i run di `v1` (`che-cosa`, `[STATO]`),
+    ma solo in coda: gli id vecchi non si sono spostati. L'adattatore deve
+    caricare il checkpoint alla SUA dimensione, non a quella attuale."""
+    import json
+    import subprocess
+
+    attuale = json.load(open("cervello/vocabolario.json"))["token"]
+    for commit in ("635afbd", "697451d"):
+        vecchio = json.loads(
+            subprocess.run(
+                ["git", "show", f"{commit}:cervello/vocabolario.json"],
+                capture_output=True, text=True, check=True,
+            ).stdout
+        )["token"]
+        assert attuale[: len(vecchio)] == vecchio, (
+            f"il vocabolario di {commit} non è più un prefisso di quello attuale: "
+            "i checkpoint storici non sono più caricabili e sonde/adattatori.py va rivisto"
+        )

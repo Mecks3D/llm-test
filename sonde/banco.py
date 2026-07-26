@@ -292,16 +292,24 @@ def lunghezza(seed: int) -> int:
     return random.Random(f"lunghezza-{seed}").randint(8, 22)
 
 
+def lunghezza_stadio1(seed: int) -> int:
+    """Lunghezza delle storie dello stadio 1 di `v1` (`storie_corte: true`,
+    3-6 tick): identica byte per byte a `esami/genera.py::_n_tick`, così il
+    confronto con `v1` avviene sulle SUE storie e non su altre."""
+    return random.Random(f"stadio1-{seed}").randint(3, 6)
+
+
 def valuta_campione(
     seed_base: int = 2000,
     n_storie: int = 40,
+    lunghezza_fn=lunghezza,
     **kwargs,
 ) -> tuple[list[Esito], float]:
     esiti: list[Esito] = []
     purezze: list[tuple[float, int]] = []
     for i in range(n_storie):
         seed = seed_base + i
-        e, purezza, n = valuta_storia(seed, lunghezza(seed), **kwargs)
+        e, purezza, n = valuta_storia(seed, lunghezza_fn(seed), **kwargs)
         esiti += e
         if n:
             purezze.append((purezza, n))
