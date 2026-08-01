@@ -323,6 +323,9 @@ rete.
    così la storia del progetto è su una scala unica.
 4. **M1** slot, persistenza, catena, loss predittiva. Associazione forzata,
    poi appresa. Sonde P1, P2, P3, P5, P6, P7.
+   **Piano esecutivo: `fasi/FASE_MENTE_M1_PIANO.md`.** Contiene i numeri da
+   battere rimisurati su un campione utile, che correggono §12.2 (vedi la nota
+   qui sotto), e il criterio di fallimento.
 5. **M2–M3** canale linguistico.
 6. **M4** esame ufficiale + modalità solo-lingua (§8.1).
 
@@ -363,13 +366,38 @@ l'architettura, ed è protetto da un test.
 
 | sonda | esito |
 |---|---|
-| **P1 permanenza** | crolla: 0,80 a età 0, ~0,10 da 3 tick in poi, 0,00 sul mai visto. Con 2 camere su 6 e sola visione il riferimento non ha nessun modello di ciò che accade fuori campo: **è il vuoto che `mente/` deve riempire** |
+| **P1 permanenza** | crolla: 0,80 a età 0, ~0,10 da 3 tick in poi, 0,00 sul mai visto. Con 2 camere su 6 e sola visione il riferimento non ha nessun modello di ciò che accade fuori campo: **è il vuoto che `mente/` deve riempire** (ma vedi la correzione qui sotto) |
 | **P2 binding** | 0,718 sulle istanze ambigue contro 0,883 sulle uniche: 17 punti di divario. Purezza delle rilevazioni 0,975 |
 | **P3 interferenza** | 0,947 (cast 1) → 0,872 (cast 6): degrado di 7 punti. `v1` sullo stesso asse crollava da 0,98 a 0,57. **Lo stato strutturato regge dove il transformer si sfalda** |
 | **P4 calibrazione** | astenendosi sul 50% meno sicuro l'esattezza sale da 0,870 a 0,907: la confidenza significa qualcosa, ma poco |
 | **P5 robustezza** | 0,872 pulito → 0,832 con rumore pieno. Falsi positivi e confusione di classe fanno più danno delle mancate rilevazioni, perché corrompono il binding (purezza 0,975 → 0,886) |
 | **P6 propagazione** | 0,957 / 0,871 / 0,625 a profondità 1 / 2 / 3 |
 | **P7 sorpresa** | 0,059 sulle classi che cambiano, contro 0,000 della baseline che copia il frame. **Il riferimento non ha modello del moto: è il bersaglio più chiaro per la rete** |
+
+### 12.2.1 Correzione a P1 e P7 (2026-08-01)
+
+Rimisurando su un campione utile per scrivere il piano di M1 sono emerse due
+cose che rendono i numeri qui sopra inadatti a fare da bersaglio.
+
+**P1 era misurata su un campione troppo piccolo.** A `n_storie=20` (il default
+delle sonde) la fascia "età ≥ 1" contiene **30 casi**, da cui il "~0,10". A
+`n_storie=200` sono 272 casi e il valore è **0,0588**; a 400 casi sono 517 e
+resta 0,0580. Il numero da battere è 0,0588, e tutte le misure di M1 si fanno
+ad almeno 200 storie (7,5 s in locale). Da notare anche la distribuzione della
+massa: "età 0" è il 44% delle domande e "mai vista" il 47%, quindi la fascia
+che misura davvero la permanenza è il 9% del totale.
+
+**La baseline "copia frame" di P7 è uno zero per costruzione, non una misura.**
+`banco._misura_predizione` definisce il sottoinsieme sorpresa come
+`reale △ precedente`, e la baseline predice `precedente`: su una differenza
+simmetrica `(c in prima) == (c in reale)` è falsa per ogni `c`, sempre. Quindi
+§6 di questo documento è troppo generoso quando dice che "un modello che non
+batte la copia del frame non ha imparato niente": batterla non significa
+niente. L'unico confronto che conta su P7 è con `regole/`.
+
+Per completezza, P7 a `n_storie=200`: sola visione **0,0083**, visione+lingua
+0,0505 (il 0,059 della tabella era a 40 storie su entrambi i canali). M1 è lo
+stadio a sola percezione, quindi il suo bersaglio è 0,0083.
 
 ### 12.3 Tre regole di buon senso trovate misurando
 
