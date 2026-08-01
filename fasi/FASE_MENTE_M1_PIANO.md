@@ -3,8 +3,10 @@
 Piano esecutivo dello stadio M1 di `fasi/FASE_MENTE.md` §7 e §11.4.
 Prerequisito: M0 (fatto, `3c68bf4`). Leggere prima `FASE_MENTE.md`, tutto.
 
-Stato: **da approvare**. Una volta approvato si esegue alla lettera; i punti su
-cui fermarsi e chiedere sono elencati in §9 e sono gli unici.
+Stato: **APPROVATO da Andrea il 2026-08-01.** Si esegue alla lettera. Le
+decisioni di design sono chiuse: non si riaprono, non si "migliorano" per
+iniziativa. I punti su cui fermarsi e chiedere sono elencati in §9 e sono gli
+unici.
 
 ---
 
