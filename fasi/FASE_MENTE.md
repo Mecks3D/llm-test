@@ -180,6 +180,19 @@ Date `M` rilevazioni e `K` slot, si costruisce una matrice di punteggio
 `M × (K+1)` (il `+1` è "entità nuova") e si normalizza con Sinkhorn per
 ottenere un assegnamento morbido e differenziabile (una rilevazione, uno slot).
 
+**Attenzione al dustbin — errore facile.** Una Sinkhorn doppiamente stocastica
+normalizza *anche* la colonna `K+1`, che quindi assorbe al più **una**
+rilevazione. Se in un frame compaiono tre oggetti nuovi, due vengono forzati
+dentro slot esistenti sbagliati e il binding si corrompe in silenzio. Serve la
+formulazione di SuperGlue: **riga e colonna di scarto con marginale rilassato**
+— la colonna `K+1` ha capacità `M` (non 1) e la riga `M+1` ha capacità `K`,
+così ogni rilevazione può essere nuova e ogni slot può restare non osservato.
+Le altre righe e colonne mantengono marginale 1.
+
+Test di accettazione, da scrivere prima del modello: un frame con `n` classi
+mai viste su una memoria vuota deve allocare **`n` slot distinti**, per
+`n = 1, 2, 3`. È il caso che la formulazione ingenua sbaglia.
+
 Tratti del punteggio: compatibilità di classe, compatibilità spaziale (credo
 che questo slot sia in questa stanza?), recency, similarità dell'embedding
 d'identità, corrispondenza di `id_traccia` quando c'è.
@@ -405,3 +418,47 @@ sono esattamente ciò che §5 chiede alla rete di imparare da sola.
   "+ posizione" della decisione 1 non è ancora valutabile davvero.
 - P6 a profondità 3 ha pochi casi (N=8): serve un campione più grande, o
   storie costruite apposta.
+
+## 13. Il documento di visione: che cosa se ne prende
+
+Esiste un documento di visione a ruota libera, prodotto con un altro agente
+(`visione-sviluppo-cervello-bambino.md`, tenuto fuori dal repo). È un buon
+documento di **direzione a lungo termine** e un cattivo documento di **piano**:
+gran parte riscrive §5 in prosa più ambiziosa, e va letto sapendo che questo
+file resta la specifica. Triage fatto il 2026-08-01.
+
+**Assorbito qui.** La correzione del dustbin di Sinkhorn (§5.4) nasce
+dall'esame della sua §2, che ha l'errore descritto sopra.
+
+**Accolto come lavoro futuro, fuori da M1–M4.**
+
+- **M5 — teoria della mente (test di Sally-Anne).** È l'unica idea davvero
+  nuova del documento con una realizzazione architetturale evidente: una
+  seconda mappa di credenza indicizzata per agente, con lo stesso codice di §5,
+  aggiornata solo dalle evidenze che *quell'agente* ha ricevuto. Dà un esame
+  che nessun'altra parte del progetto sa dare. Prerequisito: M3 verde.
+- **Memoria dormiente per cambio di contesto.** Snapshot degli slot quando il
+  contesto cambia. Ragionevole quando i luoghi supereranno `K=32`; nel
+  micro-mondo attuale `K=32` copre tutto, quindi non serve.
+- **Log causale per slot** ("`git log` dell'entità"). Costa una lista in
+  append e renderebbe le sonde molto più leggibili in diagnosi. Da valutare in
+  M1 se il debug lo richiede, non prima.
+- **Slot #0 "IO".** Riservare lo slot 0 costa zero e un domani serve per le
+  relazioni egocentriche. Ma finché il sistema è un *osservatore* che non
+  agisce, è una prenotazione e non una funzione: si riserva l'indice, non si
+  costruisce niente sopra.
+
+**Da chiarire prima di usarlo.** Il documento parla di "grafi di dipendenza
+sintattica UD standard" come se esistessero nel progetto. Non esistono: non c'è
+spaCy da nessuna parte e `lingua/analizza.py` è un parser scritto a mano su
+lessico chiuso. O è solo un nome nuovo per ciò che c'è già — e allora si dice
+"grafo di dipendenza", senza "UD" — oppure introduce una dipendenza che tocca
+la Regola 1 di `CLAUDE.md` e va decisa esplicitamente. §5.6 di questo file
+intende la prima lettura.
+
+**Non accolto.** La sezione su traumi e "riconcettualizzazione notturna" non
+descrive un meccanismo: "un evento isolato non riscrive una regola generale" è
+un aggiornamento bayesiano con prior, cioè esattamente ciò che il gate di §5.5
+fa se è addestrato bene. Chiamarlo AI safety fa sembrare fatta una cosa che non
+è stata nemmeno definita. Resta come nota, fuori dal piano. Stessa sorte per il
+"Global Workspace", che è un'etichetta sulla mappa a slot che già esiste.
